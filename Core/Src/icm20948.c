@@ -1,5 +1,6 @@
 #include "icm20948.h"
 #include "gpio.h"
+extern void Safe_USB_Printf(const char *format, ...);
 
 IMU_Data_t imu_data = {0};
 
@@ -100,18 +101,23 @@ uint8_t ICM20948_Init(void) {
     Soft_I2C_WriteReg(ICM20948_ADDR, REG_USER_CTRL, 0x20); // 使能 Master
 
     // ==========================================================
-    // 【修改为开漏低电平有效】：配合 TXS0104E 电平转换器
-    // ==========================================================
+    // 【调试模式】：禁用全部 ICM 中断源 + 清全部 INT_STATUS
     // INT_PIN_CFG = 0xC0: INT1_ACTL(bit7)=1 低电平有效, INT1_OPEN(bit6)=1 开漏输出
+    // ==========================================================
     Soft_I2C_WriteReg(ICM20948_ADDR, 0x0F, 0xC0);   // INT_PIN_CFG: Active Low, Open-Drain
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x10, 0x00);   // INT_ENABLE: 禁用所有中断源
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x11, 0x01);   // INT_ENABLE_1: 使能Raw Data Ready标志位（但不输出到INT1）
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x12, 0x00);   // INT_ENABLE_2
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x13, 0x00);   // INT_ENABLE_3
+    Soft_I2C_WriteReg(ICM20948_ADDR, 0x10, 0x00);   // INT_ENABLE: 禁用
+    Soft_I2C_WriteReg(ICM20948_ADDR, 0x11, 0x00);   // INT_ENABLE_1: 禁用 Data Ready
+    Soft_I2C_WriteReg(ICM20948_ADDR, 0x12, 0x00);   // INT_ENABLE_2: 禁用
+    Soft_I2C_WriteReg(ICM20948_ADDR, 0x13, 0x00);   // INT_ENABLE_3: 禁用
 
-    // Dummy read INT_STATUS_1 (0x1A) 以清除上电默认中断，释放 INT1 引脚
-    uint8_t dummy_status = Soft_I2C_ReadReg(ICM20948_ADDR, 0x1A);
-    (void)dummy_status;
+    // 读取所有 INT_STATUS 以清除 pending 中断
+    uint8_t dummy;
+    dummy = Soft_I2C_ReadReg(ICM20948_ADDR, 0x19); (void)dummy;  // INT_STATUS
+    dummy = Soft_I2C_ReadReg(ICM20948_ADDR, 0x1A); (void)dummy;  // INT_STATUS_1
+    dummy = Soft_I2C_ReadReg(ICM20948_ADDR, 0x1B); (void)dummy;  // INT_STATUS_2
+    dummy = Soft_I2C_ReadReg(ICM20948_ADDR, 0x1C); (void)dummy;  // INT_STATUS_3
+
+    Safe_USB_Printf("[ICM20948] interrupts disabled and status cleared for debug\r\n");
 
     return 0;
 }

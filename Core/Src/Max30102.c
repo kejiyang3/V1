@@ -139,15 +139,15 @@ void MAX30102_Init(void)
     // Step 10: Disable temperature sensor (not needed)
     while (MAX30102_WriteByte(TEMPERATURE_CONFIG, 0x00) != SUCCESS);
 
-    // Step 11: FINALLY enable interrupts (FIFO_A_FULL only)
-    while (MAX30102_WriteByte(INTERRUPT_ENABLE1, 0x80) != SUCCESS);  /* 0x80 enables FIFO_A_FULL interrupt */
-    while (MAX30102_WriteByte(INTERRUPT_ENABLE2, 0x00) != SUCCESS);  /* Disable other interrupts */
+    // Step 11 (debug): 禁用所有中断源，仅保留状态读取
+    while (MAX30102_WriteByte(INTERRUPT_ENABLE1, 0x00) != SUCCESS);  /* 禁用 A_FULL */
+    while (MAX30102_WriteByte(INTERRUPT_ENABLE2, 0x00) != SUCCESS);  /* 禁用其他中断 */
 
     // Step 12: Final status read to ensure clean start
     while (MAX30102_ReadBuffer(INTERRUPT_STATUS1, &data1, 1) != SUCCESS);
     while (MAX30102_ReadBuffer(INTERRUPT_STATUS2, &data2, 1) != SUCCESS);
 
-    usb_printf("[MAX30102] Initialization hardened: INT pin should be HIGH\r\n");
+    usb_printf("[MAX30102] interrupts disabled and status cleared for debug\r\n");
 }
 
 /**
