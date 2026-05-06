@@ -1,0 +1,43 @@
+# Build output
+build/
+_build/
+build.ninja
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.o
+*.d
+*.elf
+*.hex
+*.bin
+*.map
+*.su
+
+# IDE files
+.mxproject
+.project
+.cproject
+.settings/
+*.launch
+*.uvguix.*
+*.uvoptx
+*.uvprojx
+*.eww
+*.ewp
+*.ewd
+*.scvd
+*.bak
+
+# Python virtual env / cache
+python/__pycache__/
+python/*.egg-info/
+python/.venv/
+python/venv/
+
+# Generated / temporary
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
