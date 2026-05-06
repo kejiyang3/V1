@@ -17,6 +17,8 @@
 #include "app_lvgl.h"
 // #include "sd_wav_test.h"  /* SD卡任务已屏蔽 */
 #include "max3003.h"
+#include "icm20948.h"
+#include "max30102.h"
 #include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
@@ -235,53 +237,47 @@ void StartTask_Sensor(void *argument)
   /* USER CODE BEGIN StartTask_Sensor */
   (void)argument;
 
-  Safe_USB_Printf("[SENSOR] task entered\r\n");
-
   EcgTaskHandle = xTaskGetCurrentTaskHandle();
 
-  /*
-   * 避开 USB 枚举阶段。
-   */
+  /* 避开 USB 枚举阶段 */
   osDelay(3000);
+
+  Safe_USB_Printf("[SENSOR] task entered\r\n");
+
+  /* ---- ICM-20948 IMU 初始化 ---- */
+  Safe_USB_Printf("[SENSOR] before ICM20948_Init\r\n");
+  if (ICM20948_Init() == 0) {
+      Safe_USB_Printf("[SENSOR] ICM20948_Init OK\r\n");
+  } else {
+      Safe_USB_Printf("[SENSOR] ICM20948_Init FAILED\r\n");
+  }
+
+  /* ---- MAX30102 心率初始化 ---- */
+  Safe_USB_Printf("[SENSOR] before MAX30102_Init\r\n");
+  MAX30102_Init();
+  Safe_USB_Printf("[SENSOR] after MAX30102_Init\r\n");
+
+  /* ---- MAX30003 ECG 初始化 ---- */
   Safe_USB_Printf("[SENSOR] before MAX30003_Init\r\n");
-
   MAX30003_Init();
-
   Safe_USB_Printf("[SENSOR] after MAX30003_Init\r\n");
 
-  /*
-   * 清掉可能残留的任务通知和 EXTI pending。
-   */
-  while (ulTaskNotifyTake(pdTRUE, 0) > 0) {
-      /* drain stale notifications */
-  }
+  /* 清掉可能残留的任务通知和 EXTI pending */
+  while (ulTaskNotifyTake(pdTRUE, 0) > 0) {}
 
   __HAL_GPIO_EXTI_CLEAR_IT(ECG_INT_Pin);
 
-  /*
-   * 先允许 ISR 通知，再启动 MAX30003 stream。
-   */
   ecg_streaming = 1;
   Safe_USB_Printf("[SENSOR] before MAX30003_StartStream\r\n");
 
   MAX30003_StartStream();
-
   Safe_USB_Printf("[SENSOR] after MAX30003_StartStream\r\n");
-  Safe_USB_Printf("[ECG] INT-Driven started. 5ms fallback polling enabled.\r\n");
 
-  /*
-   * 启动后主动读一次，防止刚开启时已有 EINT。
-   */
   MAX30003_Task();
 
   for (;;)
   {
-      /*
-       * 512 SPS + 32-word FIFO 理论满载时间约 62.5 ms。
-       * fallback 改为 5 ms，避免漏中断后堆满。
-       */
       (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5));
-
       MAX30003_Task();
   }
   /* USER CODE END StartTask_Sensor */

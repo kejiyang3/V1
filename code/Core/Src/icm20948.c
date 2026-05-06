@@ -80,7 +80,7 @@ uint8_t ICM20948_Init(void) {
 
     // 3. 开启内部 AK09916 磁力计
     ICM_SelectBank(0);
-    Soft_I2C_WriteReg(ICM20948_ADDR, REG_INT_PIN_CFG, 0x02); // Bypass使能
+    Soft_I2C_WriteReg(ICM20948_ADDR, REG_INT_PIN_CFG, 0xC2); // Bypass使能 + ActiveLow + OpenDrain
     HAL_Delay(10);
     
     uint8_t ak_addr = 0x0C;
@@ -88,7 +88,7 @@ uint8_t ICM20948_Init(void) {
     HAL_Delay(10);
     Soft_I2C_WriteReg(ak_addr, 0x31, 0x08); // 100Hz 连续模式4
     
-    Soft_I2C_WriteReg(ICM20948_ADDR, REG_INT_PIN_CFG, 0x00); // 关闭Bypass
+    Soft_I2C_WriteReg(ICM20948_ADDR, REG_INT_PIN_CFG, 0xC0); // 关闭Bypass，保持ActiveLow+OpenDrain
     
     ICM_SelectBank(3);
     Soft_I2C_WriteReg(ICM20948_ADDR, 0x01, 0x07);        
@@ -100,14 +100,18 @@ uint8_t ICM20948_Init(void) {
     Soft_I2C_WriteReg(ICM20948_ADDR, REG_USER_CTRL, 0x20); // 使能 Master
 
     // ==========================================================
-    // 【修改为轮询模式】：关闭 INT1 依赖，改用 Task 内 polling 读取
+    // 【修改为开漏低电平有效】：配合 TXS0104E 电平转换器
     // ==========================================================
-    // 禁用硬件中断引脚，但保持内部 RAW_DATA_RDY 标志位有效供轮询读取
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x0F, 0x00);   // INT_PIN_CFG: 禁用INT1输出
+    // INT_PIN_CFG = 0xC0: INT1_ACTL(bit7)=1 低电平有效, INT1_OPEN(bit6)=1 开漏输出
+    Soft_I2C_WriteReg(ICM20948_ADDR, 0x0F, 0xC0);   // INT_PIN_CFG: Active Low, Open-Drain
     Soft_I2C_WriteReg(ICM20948_ADDR, 0x10, 0x00);   // INT_ENABLE: 禁用所有中断源
     Soft_I2C_WriteReg(ICM20948_ADDR, 0x11, 0x01);   // INT_ENABLE_1: 使能Raw Data Ready标志位（但不输出到INT1）
     Soft_I2C_WriteReg(ICM20948_ADDR, 0x12, 0x00);   // INT_ENABLE_2
     Soft_I2C_WriteReg(ICM20948_ADDR, 0x13, 0x00);   // INT_ENABLE_3
+
+    // Dummy read INT_STATUS_1 (0x1A) 以清除上电默认中断，释放 INT1 引脚
+    uint8_t dummy_status = Soft_I2C_ReadReg(ICM20948_ADDR, 0x1A);
+    (void)dummy_status;
 
     return 0;
 }

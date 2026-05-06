@@ -72,16 +72,16 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(ECG_CS_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : ICM_INT_Pin */
+  /*Configure GPIO pin : ICM_INT_Pin (Falling Edge) */
   GPIO_InitStruct.Pin = ICM_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(ICM_INT_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PPG_INT_Pin */
+  /*Configure GPIO pin : PPG_INT_Pin (Falling Edge) */
   GPIO_InitStruct.Pin = PPG_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(PPG_INT_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : KEY_BTN_Pin */
@@ -144,10 +144,10 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF0_MCO;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : ECG_INT_Pin */
+  /* ECG_INT_Pin — 保留原 EXTI 下降沿中断配置 */
   GPIO_InitStruct.Pin = ECG_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(ECG_INT_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : SD_DETECT_Pin */

@@ -89,6 +89,11 @@ void MAX30102_Init(void)
         HAL_Delay(300);
     }
 
+    // Step 0: 设备就绪后立即清除上电默认 PWR_RDY 中断，释放 INT 引脚死锁
+    uint8_t clear_status;
+    MAX30102_ReadBuffer(INTERRUPT_STATUS1, &clear_status, 1);
+    MAX30102_ReadBuffer(INTERRUPT_STATUS2, &clear_status, 1);
+
     // Step 1: Force software reset (bit6=1)
     while (MAX30102_WriteByte(MODE_CONFIGURATION, 0x40) != SUCCESS);
     HAL_Delay(50);  // Wait for reset to complete (datasheet: reset takes ~1ms)
