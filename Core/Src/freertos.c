@@ -57,6 +57,9 @@ void APP_BLE_ParseCommand(const char *cmd);
 
 /* ===== MAX30003 中断驱动 (ETAG解析在 max3003.c 的 MAX30003_Task 中) ===== */
 extern volatile uint8_t ecg_streaming;         /* 定义在 main.c */
+extern volatile uint32_t ecg_irq_count;        /* 定义在 main.c */
+extern volatile uint32_t ppg_irq_count;        /* 定义在 main.c */
+extern volatile uint32_t icm_irq_count;        /* 定义在 main.c */
 TaskHandle_t EcgTaskHandle = NULL;             /* ECG任务句柄, 供ISR直接通知 */
 
 /* ===== BATCH RECORD & DUMP ARCHITECTURE ===== */
@@ -70,6 +73,25 @@ typedef enum {
 } SysState_t;
 
 volatile SysState_t g_sys_state = SYS_STATE_RECORDING;
+
+/* ===== 调试步进状态码 ===== */
+volatile uint32_t g_debug_step = 0;
+volatile uint32_t g_fault_code  = 0;
+
+#define DBG_STEP_BOOT_USB_READY               10
+#define DBG_STEP_SENSOR_TASK_ENTERED         100
+#define DBG_STEP_BEFORE_ICM_INIT             110
+#define DBG_STEP_AFTER_ICM_INIT              120
+#define DBG_STEP_BEFORE_MAX30102_INIT        130
+#define DBG_STEP_AFTER_MAX30102_INIT         140
+#define DBG_STEP_AFTER_PPG_ICM_CLEAR         150
+#define DBG_STEP_BEFORE_MAX30003_INIT        200
+#define DBG_STEP_AFTER_MAX30003_INIT         210
+#define DBG_STEP_BEFORE_START_STREAM         220
+#define DBG_STEP_ENTER_START_STREAM          230
+#define DBG_STEP_LEAVE_START_STREAM          240
+#define DBG_STEP_ENTER_FIRST_ECG_TASK        250
+#define DBG_STEP_ECG_LOOP_ALIVE              260
 /* USER CODE END Variables */
 /* Definitions for Task_LVGL */
 osThreadId_t Task_LVGLHandle;
@@ -82,7 +104,7 @@ const osThreadAttr_t Task_LVGL_attributes = {
 osThreadId_t Task_SensorHandle;
 const osThreadAttr_t Task_Sensor_attributes = {
   .name = "Task_Sensor",
-  .stack_size = 1024 * 4,
+  .stack_size = 2048 * 4,
   .priority = (osPriority_t) osPriorityAboveNormal,
 };
 /* Definitions for Task_Audio */
@@ -130,6 +152,8 @@ const osEventFlagsAttr_t EG_SystemState_attributes = {
 static void APP_Sensor_Comm_Test(void);
 void Safe_USB_Printf(const char *format, ...);
 /* USER CODE END FunctionPrototypes */
+	static void APP_Print_Int_Pin_Levels(const char *tag);
+	static void APP_Clear_PPG_ICM_Interrupts_For_Debug(void);
 
 void StartTask_LVGL(void *argument);
 void StartTask_Sensor(void *argument);
@@ -239,46 +263,78 @@ void StartTask_Sensor(void *argument)
 
   EcgTaskHandle = xTaskGetCurrentTaskHandle();
 
-  /* 避开 USB 枚举阶段 */
   osDelay(3000);
 
-  Safe_USB_Printf("[SENSOR] task entered\r\n");
+  g_debug_step = DBG_STEP_SENSOR_TASK_ENTERED;
+  Safe_USB_Printf("\r\n[SENSOR] task entered\r\n");
+  APP_Print_Int_Pin_Levels("before_sensor_init");
 
-  /* ---- ICM-20948 IMU 初始化 ---- */
-  Safe_USB_Printf("[SENSOR] before ICM20948_Init\r\n");
+  /* ---- Step 1: ICM20948 ---- */
+  g_debug_step = DBG_STEP_BEFORE_ICM_INIT;
+  Safe_USB_Printf("[SENSOR] step 1: before ICM20948_Init\r\n");
   if (ICM20948_Init() == 0) {
-      Safe_USB_Printf("[SENSOR] ICM20948_Init OK\r\n");
+      Safe_USB_Printf("[SENSOR] step 2: ICM20948_Init OK\r\n");
   } else {
-      Safe_USB_Printf("[SENSOR] ICM20948_Init FAILED\r\n");
+      Safe_USB_Printf("[SENSOR][ERR] step 2: ICM20948_Init FAILED (continuing)\r\n");
   }
+  g_debug_step = DBG_STEP_AFTER_ICM_INIT;
+  APP_Print_Int_Pin_Levels("after_icm_init");
 
-  /* ---- MAX30102 心率初始化 ---- */
-  Safe_USB_Printf("[SENSOR] before MAX30102_Init\r\n");
+  /* ---- Step 3: MAX30102 ---- */
+  g_debug_step = DBG_STEP_BEFORE_MAX30102_INIT;
+  Safe_USB_Printf("[SENSOR] step 3: before MAX30102_Init\r\n");
+  APP_Print_Int_Pin_Levels("before_max30102_init");
   MAX30102_Init();
-  Safe_USB_Printf("[SENSOR] after MAX30102_Init\r\n");
+  g_debug_step = DBG_STEP_AFTER_MAX30102_INIT;
+  Safe_USB_Printf("[SENSOR] step 4: after MAX30102_Init\r\n");
+  APP_Print_Int_Pin_Levels("after_max30102_init");
 
-  /* ---- MAX30003 ECG 初始化 ---- */
-  Safe_USB_Printf("[SENSOR] before MAX30003_Init\r\n");
+  /* ---- Step 4: 统一清 PPG/ICM 中断 ---- */
+  APP_Clear_PPG_ICM_Interrupts_For_Debug();
+  g_debug_step = DBG_STEP_AFTER_PPG_ICM_CLEAR;
+  APP_Print_Int_Pin_Levels("after_clear_ppg_icm_int");
+
+  /* ---- Step 5: MAX30003 ---- */
+  g_debug_step = DBG_STEP_BEFORE_MAX30003_INIT;
+  Safe_USB_Printf("[SENSOR] step 5: before MAX30003_Init\r\n");
+  APP_Print_Int_Pin_Levels("before_max30003_init");
+
   MAX30003_Init();
-  Safe_USB_Printf("[SENSOR] after MAX30003_Init\r\n");
 
-  /* 清掉可能残留的任务通知和 EXTI pending */
+  g_debug_step = DBG_STEP_AFTER_MAX30003_INIT;
+  Safe_USB_Printf("[SENSOR] step 6: after MAX30003_Init\r\n");
+
+  /* 清 ECG 通知和水槽 */
   while (ulTaskNotifyTake(pdTRUE, 0) > 0) {}
-
   __HAL_GPIO_EXTI_CLEAR_IT(ECG_INT_Pin);
-
   ecg_streaming = 1;
-  Safe_USB_Printf("[SENSOR] before MAX30003_StartStream\r\n");
 
+  /* ---- Step 6: StartStream ---- */
+  g_debug_step = DBG_STEP_BEFORE_START_STREAM;
+  Safe_USB_Printf("[SENSOR] step 7: before MAX30003_StartStream\r\n");
   MAX30003_StartStream();
-  Safe_USB_Printf("[SENSOR] after MAX30003_StartStream\r\n");
+  g_debug_step = DBG_STEP_LEAVE_START_STREAM;
+  Safe_USB_Printf("[SENSOR] step 8: after MAX30003_StartStream\r\n");
 
+  /* ---- Step 7: first ECG Task + loop ---- */
+  g_debug_step = DBG_STEP_ENTER_FIRST_ECG_TASK;
+  Safe_USB_Printf("[SENSOR] step 9: before first MAX30003_Task\r\n");
   MAX30003_Task();
+  Safe_USB_Printf("[SENSOR] step 10: entering ECG loop\r\n");
 
-  for (;;)
-  {
+  uint32_t last_hb = HAL_GetTick();
+
+  for (;;) {
       (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5));
       MAX30003_Task();
+
+      if ((HAL_GetTick() - last_hb) >= 1000) {
+          last_hb = HAL_GetTick();
+          g_debug_step = DBG_STEP_ECG_LOOP_ALIVE;
+          Safe_USB_Printf("[HEARTBEAT] tick=%lu step=%lu ppg=%lu icm=%lu ecg=%lu\r\n",
+                          HAL_GetTick(), g_debug_step,
+                          ppg_irq_count, icm_irq_count, ecg_irq_count);
+      }
   }
   /* USER CODE END StartTask_Sensor */
 }
@@ -400,6 +456,69 @@ void StartTask_BLE(void *argument)
 /* USER CODE BEGIN Application */
 
 /**
+  * @brief  打印 PPG_INT / ICM_INT 当前电平，用于中断诊断
+  * @param  tag  阶段标识字符串
+  */
+static void APP_Print_Int_Pin_Levels(const char *tag)
+{
+    GPIO_PinState ppg = HAL_GPIO_ReadPin(PPG_INT_GPIO_Port, PPG_INT_Pin);
+    GPIO_PinState icm = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
+
+    Safe_USB_Printf("[INT_LEVEL][%s] PPG_INT=%s, ICM_INT=%s\r\n",
+                    tag,
+                    (ppg == GPIO_PIN_SET) ? "HIGH" : "LOW",
+                    (icm == GPIO_PIN_SET) ? "HIGH" : "LOW");
+}
+
+/**
+  * @brief  调试用：强制读取并清除 PPG(MAX30102) 和 ICM(ICM20948) 的中断状态寄存器
+  * @note   读取状态寄存器的硬件动作会触发 INT 引脚释放（read-to-clear）。
+  *         使用直连 HAL_I2C 而非驱动封装，避免函数不可见带来的编译问题。
+  */
+static void APP_Clear_PPG_ICM_Interrupts_For_Debug(void)
+{
+    extern I2C_HandleTypeDef hi2c3;
+    uint8_t val;
+    HAL_StatusTypeDef ret;
+
+    Safe_USB_Printf("[INT_CLEAR] begin clear PPG/ICM interrupt status\r\n");
+
+    /* ---- MAX30102 中断状态 ---- */
+    ret = HAL_I2C_Mem_Read(&hi2c3, (0x57 << 1), 0x00, I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+    Safe_USB_Printf("[INT_CLEAR] MAX30102 INT_STATUS1(0x00)=0x%02X %s\r\n", val,
+                    (ret == HAL_OK) ? "" : "[ERR]");
+
+    ret = HAL_I2C_Mem_Read(&hi2c3, (0x57 << 1), 0x01, I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+    Safe_USB_Printf("[INT_CLEAR] MAX30102 INT_STATUS2(0x01)=0x%02X %s\r\n", val,
+                    (ret == HAL_OK) ? "" : "[ERR]");
+
+    osDelay(5);
+
+    /* ---- ICM20948 中断状态 ---- */
+    /* 切到 Bank 0 */
+    HAL_I2C_Mem_Write(&hi2c3, (0x68 << 1), 0x7F, I2C_MEMADD_SIZE_8BIT, (uint8_t[]){0x00}, 1, 100);
+
+    ret = HAL_I2C_Mem_Read(&hi2c3, (0x68 << 1), 0x19, I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+    Safe_USB_Printf("[INT_CLEAR] ICM INT_STATUS(0x19)=0x%02X %s\r\n", val,
+                    (ret == HAL_OK) ? "" : "[ERR]");
+
+    ret = HAL_I2C_Mem_Read(&hi2c3, (0x68 << 1), 0x1A, I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+    Safe_USB_Printf("[INT_CLEAR] ICM INT_STATUS_1(0x1A)=0x%02X %s\r\n", val,
+                    (ret == HAL_OK) ? "" : "[ERR]");
+
+    ret = HAL_I2C_Mem_Read(&hi2c3, (0x68 << 1), 0x1B, I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+    Safe_USB_Printf("[INT_CLEAR] ICM INT_STATUS_2(0x1B)=0x%02X %s\r\n", val,
+                    (ret == HAL_OK) ? "" : "[ERR]");
+
+    ret = HAL_I2C_Mem_Read(&hi2c3, (0x68 << 1), 0x1C, I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+    Safe_USB_Printf("[INT_CLEAR] ICM INT_STATUS_3(0x1C)=0x%02X %s\r\n", val,
+                    (ret == HAL_OK) ? "" : "[ERR]");
+
+    osDelay(5);
+    Safe_USB_Printf("[INT_CLEAR] end clear PPG/ICM interrupt status\r\n");
+}
+
+/**
   * @brief  Producer: 将样本存入 RAM buffer.
   * @note   覆盖 max3003.c 中的 weak 定义. 不可包含阻塞调用.
   */
@@ -436,61 +555,52 @@ void Packagedata_AddEcgSample(int16_t ecg)
   */
 void Safe_USB_Printf(const char *format, ...)
 {
-    static char usb_tx_buf[512];
-    static osMutexId_t usb_printf_mutex = NULL;
-
-    /* 延迟初始化互斥锁 */
-    if (usb_printf_mutex == NULL) {
-        osMutexAttr_t attr = { .name = "USB_Printf_Mutex" };
-        usb_printf_mutex = osMutexNew(&attr);
-    }
-
-    /* 1. 获取锁 (200ms 超时, 避免死等) */
-    if (osMutexAcquire(usb_printf_mutex, pdMS_TO_TICKS(200)) != osOK) {
-        return;
-    }
-
+    char usb_tx_buf[384];
     extern USBD_HandleTypeDef hUsbDeviceFS;
 
-    /* 2. USB 掉线 / 未配置保护 */
-    if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED || hUsbDeviceFS.pClassData == NULL) {
-        osMutexRelease(usb_printf_mutex);
+    if (format == NULL) return;
+
+    /* RTOS 未启动时不使用互斥锁（HAL_Delay 也不要用） */
+    osKernelState_t kernel_state = osKernelGetState();
+    uint8_t rtos_running = (kernel_state == osKernelRunning) ? 1 : 0;
+
+    /* USB 未配置直接丢弃 */
+    if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED ||
+        hUsbDeviceFS.pClassData == NULL) {
         return;
     }
 
-    USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
-
-    /* 3. 等待前一次传输完成 (Usb FS 帧周期 1ms, 50ms 足够) */
-    int32_t retry = 50;
-    while (hcdc->TxState != 0 && retry > 0) {
-        osDelay(1);
-        retry--;
-    }
-    if (hcdc->TxState != 0) {
-        hcdc->TxState = 0;   /* 异常卡死才强制清除, 丢弃此包 */
-        osMutexRelease(usb_printf_mutex);
-        return;
-    }
-
-    /* 4. 格式化字符串 */
+    /* 格式化 */
     va_list args;
     va_start(args, format);
     int len = vsnprintf(usb_tx_buf, sizeof(usb_tx_buf), format, args);
     va_end(args);
 
-    /* 5. 触发发送, 然后等待本次传输完成再释放锁 */
-    if (len > 0 && len < (int)sizeof(usb_tx_buf)) {
-        CDC_Transmit_FS((uint8_t*)usb_tx_buf, len);
+    if (len <= 0) return;
+    if (len >= (int)sizeof(usb_tx_buf)) {
+        len = (int)sizeof(usb_tx_buf) - 1;
+        usb_tx_buf[len] = '\0';
+    }
 
-        /* 等待传输完成 — 保证 usb_tx_buf 在释放锁前不再被改写 */
-        retry = 50;
-        while (hcdc->TxState != 0 && retry > 0) {
-            osDelay(1);
-            retry--;
+    /* 带重试的发送 */
+    for (int retry = 0; retry < 3; retry++) {
+        uint8_t ret = CDC_Transmit_FS((uint8_t*)usb_tx_buf, (uint16_t)len);
+        if (ret == USBD_OK) break;
+
+        if (rtos_running) {
+            osDelay(2);
+        } else {
+            /* RTOS 未启动时的短延时 (约 2ms) */
+            for (volatile uint32_t i = 0; i < 4000; i++);
         }
     }
 
-    osMutexRelease(usb_printf_mutex);
+    /* 发送后等待 USB 处理完成，避免连续发送被截断 */
+    if (rtos_running) {
+        osDelay(2);
+    } else {
+        for (volatile uint32_t i = 0; i < 4000; i++);
+    }
 }
 /**
   * @brief  Stack overflow hook — triggered by configCHECK_FOR_STACK_OVERFLOW 2
@@ -501,9 +611,10 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
     (void)xTask;
     (void)pcTaskName;
 
+    g_fault_code = 1;
+    g_debug_step = 0xDEAD;
     taskDISABLE_INTERRUPTS();
 
-    /* --- 栈溢出: 在此设断点, 查看 pcTaskName --- */
     while (1) {
         __NOP();
     }
@@ -515,9 +626,10 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
   */
 void vApplicationMallocFailedHook(void)
 {
+    g_fault_code = 2;
+    g_debug_step = 0xBEEF;
     taskDISABLE_INTERRUPTS();
 
-    /* --- 内存分配失败: 在此设断点 --- */
     while (1) {
         __NOP();
     }

@@ -209,49 +209,34 @@ void MAX30003_Init(void)
 }
 
 /**
-  * @brief  启动 ECG 采集流 (FIFO_RST + SYNCH + 开启 EINT/EOVF)
+  * @brief  启动 ECG 采集流 (简化调试版：仅 EN_INT_NORMAL + 读 STATUS)
+  * @note   Init 已完成 FIFO_RST/SYNCH，StartStream 不再重复执行。
   */
 void MAX30003_StartStream(void)
 {
-    uint32_t dummy = 0;
+    uint32_t status = 0;
 
-    Safe_USB_Printf("[DBG] StartStream begin\r\n");
+    Safe_USB_Printf("[START] step 1: enter MAX30003_StartStream\r\n");
 
-    /* 启动前先关闭 EINT/EOVF，只保留 INTB Open-Drain 类型 */
-    MAX30003_WriteReg(MAX30003_EN_INT, MAX30003_EN_INT_IDLE);
-    Safe_USB_Printf("[DBG] EN_INT_IDLE written\r\n");
-
-    /* 重新开始一段干净的 ECG 记录 */
-    MAX30003_FifoReset();
-    Safe_USB_Printf("[DBG] FIFO reset in StartStream\r\n");
-
-    MAX30003_Synch();
-    Safe_USB_Printf("[DBG] SYNCH in StartStream\r\n");
-
-    /* 清掉旧 STATUS 锁存位 */
-    if (MAX30003_ReadReg(MAX30003_STATUS, &dummy) == HAL_OK) {
-        Safe_USB_Printf("[DBG] STATUS before enable INT = 0x%06lX\r\n", dummy);
+    if (MAX30003_ReadReg(MAX30003_STATUS, &status) == HAL_OK) {
+        Safe_USB_Printf("[START] step 2: STATUS before EN_INT_NORMAL = 0x%06lX\r\n", status);
     } else {
-        Safe_USB_Printf("[DBG][ERR] STATUS read failed before enable INT\r\n");
-    }
-    HAL_Delay(1);
-    if (MAX30003_ReadReg(MAX30003_STATUS, &dummy) == HAL_OK) {
-        Safe_USB_Printf("[DBG] STATUS second read = 0x%06lX\r\n", dummy);
-    } else {
-        Safe_USB_Printf("[DBG][ERR] STATUS second read failed\r\n");
+        Safe_USB_Printf("[START][ERR] step 2: read STATUS failed\r\n");
     }
 
-    /* 任务准备就绪，再打开 EINT/EOVF */
-    MAX30003_WriteReg(MAX30003_EN_INT, MAX30003_EN_INT_NORMAL);
-    Safe_USB_Printf("[DBG] EN_INT_NORMAL written\r\n");
-
-    if (MAX30003_ReadReg(MAX30003_STATUS, &dummy) == HAL_OK) {
-        Safe_USB_Printf("[DBG] STATUS after enable INT = 0x%06lX\r\n", dummy);
+    if (MAX30003_WriteReg(MAX30003_EN_INT, MAX30003_EN_INT_NORMAL) == HAL_OK) {
+        Safe_USB_Printf("[START] step 3: EN_INT_NORMAL written\r\n");
     } else {
-        Safe_USB_Printf("[DBG][ERR] STATUS failed after enable INT\r\n");
+        Safe_USB_Printf("[START][ERR] step 3: EN_INT_NORMAL write failed\r\n");
     }
 
-    Safe_USB_Printf("[MAX30003] Stream started. FIFO reset + INT enabled.\r\n");
+    if (MAX30003_ReadReg(MAX30003_STATUS, &status) == HAL_OK) {
+        Safe_USB_Printf("[START] step 4: STATUS after EN_INT_NORMAL = 0x%06lX\r\n", status);
+    } else {
+        Safe_USB_Printf("[START][ERR] step 4: read STATUS after enable failed\r\n");
+    }
+
+    Safe_USB_Printf("[START] step 5: leave MAX30003_StartStream\r\n");
 }
 
 /**
@@ -330,22 +315,23 @@ static HAL_StatusTypeDef MAX30003_ReadFifoBurst(uint32_t *samples, uint8_t max_s
 void MAX30003_Task(void)
 {
     uint32_t status_reg = 0;
-    static uint32_t poll_cnt = 0;
+    static uint32_t call_count = 0;
     static uint32_t ovf_count = 0;
     static uint32_t pll_warn_count = 0;
     static uint32_t sample_count = 0;
     extern volatile uint32_t ecg_irq_count;
 
+    call_count++;
+
     if (MAX30003_ReadReg(MAX30003_STATUS, &status_reg) != HAL_OK) {
+        Safe_USB_Printf("[ECG_TASK][ERR] Read STATUS failed\r\n");
         return;
     }
 
-    poll_cnt++;
-
     /* 每 200 次轮询打印一次 STATUS 心跳 */
-    if ((poll_cnt % 200) == 0) {
-        Safe_USB_Printf("[MAX30003][DBG] STATUS=0x%06lX, irq=%lu, samples=%lu, poll=%lu\r\n",
-                   status_reg, ecg_irq_count, sample_count, poll_cnt);
+    if ((call_count % 200) == 0) {
+        Safe_USB_Printf("[ECG_TASK] alive call=%lu STATUS=0x%06lX irq=%lu samples=%lu\r\n",
+                   call_count, status_reg, ecg_irq_count, sample_count);
     }
 
     /* 最高优先级：处理 FIFO overflow (数据手册要求 EOVF 后必须 FIFO_RST 或 SYNCH) */

@@ -72,15 +72,15 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(ECG_CS_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : ICM_INT_Pin (Falling Edge) */
+  /* Configure GPIO pin : ICM_INT_Pin — 调试阶段改普通输入 (GPIO_PULLUP) */
   GPIO_InitStruct.Pin = ICM_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(ICM_INT_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PPG_INT_Pin (Falling Edge) */
+  /* Configure GPIO pin : PPG_INT_Pin — 调试阶段改普通输入 (GPIO_PULLUP) */
   GPIO_InitStruct.Pin = PPG_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(PPG_INT_GPIO_Port, &GPIO_InitStruct);
 
@@ -156,12 +156,12 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(SD_DETECT_GPIO_Port, &GPIO_InitStruct);
 
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI1_IRQn, 7, 0);
-  HAL_NVIC_EnableIRQ(EXTI1_IRQn);
-
-  HAL_NVIC_SetPriority(EXTI2_IRQn, 7, 0);
-  HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+  /* EXTI interrupt init — 调试阶段禁用 PPG/ICM 的 EXTI */
+  // HAL_NVIC_SetPriority(EXTI1_IRQn, 7, 0);
+  // HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+  //
+  // HAL_NVIC_SetPriority(EXTI2_IRQn, 7, 0);
+  // HAL_NVIC_EnableIRQ(EXTI2_IRQn);
 
   HAL_NVIC_SetPriority(EXTI3_IRQn, 11, 0);
   HAL_NVIC_EnableIRQ(EXTI3_IRQn);
