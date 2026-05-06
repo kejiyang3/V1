@@ -382,19 +382,11 @@ void LCD_1IN69_DisplayWindows_DMA(UWORD Xstart, UWORD Ystart, UWORD Xend, UWORD 
     // Calculate window size
     UWORD width = Xend - Xstart;
     UWORD height = Yend - Ystart;
-    UDOUBLE pixelCount = width * height;
-    UDOUBLE byteCount = pixelCount * 2;  // Each pixel is 2 bytes
+    UDOUBLE byteCount = (UDOUBLE)width * height * 2;  // Each pixel is 2 bytes
 
-    // Safety check: DMA maximum transfer size is 65535 bytes
+    // DMA maximum transfer size is 65535 bytes
     if (byteCount > 65535) {
         Debug("Error: DMA transfer size %lu exceeds 65535 limit\r\n", byteCount);
-        return;
-    }
-
-    // Limit maximum buffer size to 32KB for stack safety
-    #define MAX_DMA_BUFFER_SIZE 32000
-    if (byteCount > MAX_DMA_BUFFER_SIZE) {
-        Debug("Error: DMA transfer size %lu exceeds buffer limit %d\r\n", byteCount, MAX_DMA_BUFFER_SIZE);
         return;
     }
 
@@ -412,18 +404,8 @@ void LCD_1IN69_DisplayWindows_DMA(UWORD Xstart, UWORD Ystart, UWORD Xend, UWORD 
     LCD_1IN69_CS_0;
     LCD_1IN69_DC_1;
 
-    // Convert UWORD array to byte array (MSB first for each pixel)
-    // Using static buffer that persists during DMA transfer
-    static uint8_t dmaBuffer[MAX_DMA_BUFFER_SIZE];
-    uint32_t i;
-
-    for (i = 0; i < pixelCount; i++) {
-        dmaBuffer[i * 2] = (Image[i] >> 8) & 0xFF;  // High byte
-        dmaBuffer[i * 2 + 1] = Image[i] & 0xFF;     // Low byte
-    }
-
-    // Start DMA transfer
-    HAL_StatusTypeDef status = HAL_SPI_Transmit_DMA(&hspi1, dmaBuffer, byteCount);
+    // LV_COLOR_16_SWAP=1 时 LVGL 已自动翻转 RGB565 字节序，直接 DMA 发送
+    HAL_StatusTypeDef status = HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)Image, (uint16_t)byteCount);
     if (status != HAL_OK) {
         Debug("Error: HAL_SPI_Transmit_DMA failed with status %d\r\n", status);
         dmaBusyFlag = 0;  // Reset busy flag on error

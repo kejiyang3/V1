@@ -192,10 +192,19 @@ void MAX30003_Init(void)
                               "MNGR_INT")) return;
 
     /* 清 FIFO 并同步，无需 Delay，防止 FIFO 重新堆积 */
+    Safe_USB_Printf("[DBG] before FIFO_RST\r\n");
     MAX30003_FifoReset();
-    MAX30003_Synch();
-    MAX30003_ReadReg(MAX30003_STATUS, &dummy);
 
+    Safe_USB_Printf("[DBG] after FIFO_RST, before SYNCH\r\n");
+    MAX30003_Synch();
+
+    Safe_USB_Printf("[DBG] after SYNCH, reading STATUS\r\n");
+    if (MAX30003_ReadReg(MAX30003_STATUS, &dummy) != HAL_OK) {
+        Safe_USB_Printf("[DBG][ERR] Read STATUS failed after SYNCH\r\n");
+        return;
+    }
+
+    Safe_USB_Printf("[DBG] STATUS after init = 0x%06lX\r\n", dummy);
     Safe_USB_Printf("[MAX30003] Init done. Waiting for MAX30003_StartStream().\r\n");
 }
 
@@ -206,20 +215,41 @@ void MAX30003_StartStream(void)
 {
     uint32_t dummy = 0;
 
+    Safe_USB_Printf("[DBG] StartStream begin\r\n");
+
     /* 启动前先关闭 EINT/EOVF，只保留 INTB Open-Drain 类型 */
     MAX30003_WriteReg(MAX30003_EN_INT, MAX30003_EN_INT_IDLE);
+    Safe_USB_Printf("[DBG] EN_INT_IDLE written\r\n");
 
     /* 重新开始一段干净的 ECG 记录 */
     MAX30003_FifoReset();
+    Safe_USB_Printf("[DBG] FIFO reset in StartStream\r\n");
+
     MAX30003_Synch();
+    Safe_USB_Printf("[DBG] SYNCH in StartStream\r\n");
 
     /* 清掉旧 STATUS 锁存位 */
-    MAX30003_ReadReg(MAX30003_STATUS, &dummy);
+    if (MAX30003_ReadReg(MAX30003_STATUS, &dummy) == HAL_OK) {
+        Safe_USB_Printf("[DBG] STATUS before enable INT = 0x%06lX\r\n", dummy);
+    } else {
+        Safe_USB_Printf("[DBG][ERR] STATUS read failed before enable INT\r\n");
+    }
     HAL_Delay(1);
-    MAX30003_ReadReg(MAX30003_STATUS, &dummy);
+    if (MAX30003_ReadReg(MAX30003_STATUS, &dummy) == HAL_OK) {
+        Safe_USB_Printf("[DBG] STATUS second read = 0x%06lX\r\n", dummy);
+    } else {
+        Safe_USB_Printf("[DBG][ERR] STATUS second read failed\r\n");
+    }
 
     /* 任务准备就绪，再打开 EINT/EOVF */
     MAX30003_WriteReg(MAX30003_EN_INT, MAX30003_EN_INT_NORMAL);
+    Safe_USB_Printf("[DBG] EN_INT_NORMAL written\r\n");
+
+    if (MAX30003_ReadReg(MAX30003_STATUS, &dummy) == HAL_OK) {
+        Safe_USB_Printf("[DBG] STATUS after enable INT = 0x%06lX\r\n", dummy);
+    } else {
+        Safe_USB_Printf("[DBG][ERR] STATUS failed after enable INT\r\n");
+    }
 
     Safe_USB_Printf("[MAX30003] Stream started. FIFO reset + INT enabled.\r\n");
 }
@@ -300,22 +330,29 @@ static HAL_StatusTypeDef MAX30003_ReadFifoBurst(uint32_t *samples, uint8_t max_s
 void MAX30003_Task(void)
 {
     uint32_t status_reg = 0;
+    static uint32_t poll_cnt = 0;
     static uint32_t ovf_count = 0;
     static uint32_t pll_warn_count = 0;
     static uint32_t sample_count = 0;
+    extern volatile uint32_t ecg_irq_count;
 
     if (MAX30003_ReadReg(MAX30003_STATUS, &status_reg) != HAL_OK) {
         return;
+    }
+
+    poll_cnt++;
+
+    /* 每 200 次轮询打印一次 STATUS 心跳 */
+    if ((poll_cnt % 200) == 0) {
+        Safe_USB_Printf("[MAX30003][DBG] STATUS=0x%06lX, irq=%lu, samples=%lu, poll=%lu\r\n",
+                   status_reg, ecg_irq_count, sample_count, poll_cnt);
     }
 
     /* 最高优先级：处理 FIFO overflow (数据手册要求 EOVF 后必须 FIFO_RST 或 SYNCH) */
     if (status_reg & MAX30003_STATUS_EOVF) {
         ovf_count++;
 
-        if (ovf_count <= 5 || (ovf_count % 50) == 0) {
-            Safe_USB_Printf("[MAX30003][WARN] FIFO overflow, reset FIFO. STATUS=0x%06lX, ovf=%lu\r\n",
-                       status_reg, ovf_count);
-        }
+        Safe_USB_Printf("[MAX30003][WARN] EOVF, STATUS=0x%06lX, ovf=%lu\r\n", status_reg, ovf_count);
 
         MAX30003_FifoReset();
         MAX30003_Synch();
@@ -339,9 +376,12 @@ void MAX30003_Task(void)
         return;
     }
 
+    Safe_USB_Printf("[MAX30003][DBG] EINT detected, reading FIFO...\r\n");
+
     uint32_t samples[FIFO_BURST_SIZE];
 
     if (MAX30003_ReadFifoBurst(samples, FIFO_BURST_SIZE) != HAL_OK) {
+        Safe_USB_Printf("[MAX30003][ERR] FIFO burst read failed\r\n");
         return;
     }
 
@@ -356,6 +396,12 @@ void MAX30003_Task(void)
             Packagedata_AddEcgSample(ecg_val);
             sample_count++;
 
+            /* 每 50 个有效样本打印一次 */
+            if ((sample_count % 50) == 0) {
+                Safe_USB_Printf("[ECG] sample=%lu, val=%d, etag=0x%02X, raw=0x%06lX\r\n",
+                           sample_count, ecg_val, etag, raw_data);
+            }
+
             if (etag == 0x02) { // Last Valid Sample (EOF)
                 break;
             }
@@ -368,21 +414,21 @@ void MAX30003_Task(void)
         }
         else if (etag == 0x06) {
             /* FIFO Empty */
+            Safe_USB_Printf("[MAX30003][DBG] ETAG=0x06 FIFO empty\r\n");
             break;
         }
         else if (etag == 0x07) {
             /* FIFO Overflow tag */
             ovf_count++;
 
-            if (ovf_count <= 5 || (ovf_count % 50) == 0) {
-                Safe_USB_Printf("[MAX30003][WARN] ETAG overflow, reset FIFO. ovf=%lu\r\n", ovf_count);
-            }
+            Safe_USB_Printf("[MAX30003][WARN] ETAG overflow, reset FIFO. ovf=%lu\r\n", ovf_count);
 
             MAX30003_FifoReset();
             MAX30003_Synch();
             break;
         }
         else {
+            Safe_USB_Printf("[MAX30003][DBG] unknown ETAG=0x%02X, raw=0x%06lX\r\n", etag, raw_data);
             break;
         }
     }

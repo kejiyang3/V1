@@ -80,8 +80,8 @@ const osThreadAttr_t Task_LVGL_attributes = {
 osThreadId_t Task_SensorHandle;
 const osThreadAttr_t Task_Sensor_attributes = {
   .name = "Task_Sensor",
-  .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityRealtime,
+  .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
 };
 /* Definitions for Task_Audio */
 osThreadId_t Task_AudioHandle;
@@ -235,14 +235,19 @@ void StartTask_Sensor(void *argument)
   /* USER CODE BEGIN StartTask_Sensor */
   (void)argument;
 
+  Safe_USB_Printf("[SENSOR] task entered\r\n");
+
   EcgTaskHandle = xTaskGetCurrentTaskHandle();
 
   /*
    * 避开 USB 枚举阶段。
    */
   osDelay(3000);
+  Safe_USB_Printf("[SENSOR] before MAX30003_Init\r\n");
 
   MAX30003_Init();
+
+  Safe_USB_Printf("[SENSOR] after MAX30003_Init\r\n");
 
   /*
    * 清掉可能残留的任务通知和 EXTI pending。
@@ -257,10 +262,12 @@ void StartTask_Sensor(void *argument)
    * 先允许 ISR 通知，再启动 MAX30003 stream。
    */
   ecg_streaming = 1;
+  Safe_USB_Printf("[SENSOR] before MAX30003_StartStream\r\n");
 
   MAX30003_StartStream();
 
-  usb_printf("[ECG] INT-Driven started. 5ms fallback polling enabled.\r\n");
+  Safe_USB_Printf("[SENSOR] after MAX30003_StartStream\r\n");
+  Safe_USB_Printf("[ECG] INT-Driven started. 5ms fallback polling enabled.\r\n");
 
   /*
    * 启动后主动读一次，防止刚开启时已有 EINT。
@@ -402,9 +409,17 @@ void StartTask_BLE(void *argument)
   */
 void Packagedata_AddEcgSample(int16_t ecg)
 {
+    static uint32_t dbg_cnt = 0;
+
     if (g_sys_state == SYS_STATE_RECORDING) {
         if (ecg_buf_idx < ECG_BUFFER_SIZE) {
             ecg_buffer[ecg_buf_idx++] = ecg;
+        }
+
+        dbg_cnt++;
+
+        if ((dbg_cnt % 50) == 0) {
+            Safe_USB_Printf("[ECG_BUF] idx=%lu, val=%d\r\n", ecg_buf_idx, ecg);
         }
 
         /* 20s buffer 满了 → 自动触发 dump */
@@ -489,8 +504,13 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 {
     (void)xTask;
     (void)pcTaskName;
+
     taskDISABLE_INTERRUPTS();
-    for( ;; );
+
+    /* --- 栈溢出: 在此设断点, 查看 pcTaskName --- */
+    while (1) {
+        __NOP();
+    }
 }
 
 /**
@@ -500,7 +520,11 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 void vApplicationMallocFailedHook(void)
 {
     taskDISABLE_INTERRUPTS();
-    for( ;; );
+
+    /* --- 内存分配失败: 在此设断点 --- */
+    while (1) {
+        __NOP();
+    }
 }
 
 /**
