@@ -150,6 +150,16 @@ void MAX30102_Init(void)
     usb_printf("[MAX30102] interrupts disabled and status cleared for debug\r\n");
 }
 
+ErrorStatus MAX30102_ClearInterruptStatus(uint8_t *status1, uint8_t *status2)
+{
+    uint8_t s1 = 0, s2 = 0;
+    if (MAX30102_ReadBuffer(INTERRUPT_STATUS1, &s1, 1) != SUCCESS) return ERROR;
+    if (MAX30102_ReadBuffer(INTERRUPT_STATUS2, &s2, 1) != SUCCESS) return ERROR;
+    if (status1) *status1 = s1;
+    if (status2) *status2 = s2;
+    return SUCCESS;
+}
+
 /**
   * @brief  从 FIFO 读取 1 组样本（SpO2 模式：6 字节 = RED(3B) + IR(3B)）
   * @param  output_data: output_data[0]=IR, output_data[1]=RED（保持你应用层约定）

@@ -20,6 +20,8 @@
 #include "icm20948.h"
 #include "max30102.h"
 #include "usbd_cdc_if.h"
+#include "sensor_record.h"
+#include "sd_sensor_logger.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -140,6 +142,18 @@ osMutexId_t Mtx_SDCardHandle;
 const osMutexAttr_t Mtx_SDCard_attributes = {
   .name = "Mtx_SDCard"
 };
+/* Definitions for Mtx_I2C3 */
+osMutexId_t Mtx_I2C3Handle;
+const osMutexAttr_t Mtx_I2C3_attributes = {
+  .name = "Mtx_I2C3"
+};
+/* Definitions for Task_SDWriter */
+osThreadId_t Task_SDWriterHandle;
+const osThreadAttr_t Task_SDWriter_attributes = {
+  .name = "Task_SDWriter",
+  .stack_size = 2048 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal,
+};
 /* Definitions for EG_SystemState */
 osEventFlagsId_t EG_SystemStateHandle;
 const osEventFlagsAttr_t EG_SystemState_attributes = {
@@ -151,9 +165,11 @@ const osEventFlagsAttr_t EG_SystemState_attributes = {
 // void StartTask_SDWavTest(void *argument);  /* SD卡任务已屏蔽 */
 static void APP_Sensor_Comm_Test(void);
 void Safe_USB_Printf(const char *format, ...);
+static void APP_Print_Int_Pin_Levels(const char *tag);
+static void APP_Clear_PPG_ICM_Interrupts_For_Debug(void);
+static void APP_Handle_PPG_Event(void);
+static void APP_Handle_ICM_Event(void);
 /* USER CODE END FunctionPrototypes */
-	static void APP_Print_Int_Pin_Levels(const char *tag);
-	static void APP_Clear_PPG_ICM_Interrupts_For_Debug(void);
 
 void StartTask_LVGL(void *argument);
 void StartTask_Sensor(void *argument);
@@ -178,6 +194,7 @@ void MX_FREERTOS_Init(void) {
   Mtx_SDCardHandle = osMutexNew(&Mtx_SDCard_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
+  Mtx_I2C3Handle = osMutexNew(&Mtx_I2C3_attributes);
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -188,7 +205,7 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  /* No queues needed in batch-record architecture */
+  SDLogger_InitQueue();
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -215,6 +232,9 @@ void MX_FREERTOS_Init(void) {
   // Task_SDWavTestHandle = osThreadNew(StartTask_SDWavTest, NULL, &Task_SDWavTest_attributes);
 
   /* Task_ECG 已移除 — ECG采集合并到 Task_Sensor */
+
+  /* SD Writer 任务 — 三传感器数据统一写入 CSV */
+  Task_SDWriterHandle = osThreadNew(StartTask_SDWriter, NULL, &Task_SDWriter_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* creation of EG_SystemState */
@@ -270,69 +290,85 @@ void StartTask_Sensor(void *argument)
   APP_Print_Int_Pin_Levels("before_sensor_init");
 
   /* ---- Step 1: ICM20948 ---- */
-  g_debug_step = DBG_STEP_BEFORE_ICM_INIT;
   Safe_USB_Printf("[SENSOR] step 1: before ICM20948_Init\r\n");
   if (ICM20948_Init() == 0) {
       Safe_USB_Printf("[SENSOR] step 2: ICM20948_Init OK\r\n");
   } else {
-      Safe_USB_Printf("[SENSOR][ERR] step 2: ICM20948_Init FAILED (continuing)\r\n");
+      Safe_USB_Printf("[SENSOR][ERR] step 2: ICM20948_Init FAILED\r\n");
   }
-  g_debug_step = DBG_STEP_AFTER_ICM_INIT;
   APP_Print_Int_Pin_Levels("after_icm_init");
 
-  /* ---- Step 3: MAX30102 ---- */
-  g_debug_step = DBG_STEP_BEFORE_MAX30102_INIT;
+  /* ---- Step 2: MAX30102 ---- */
   Safe_USB_Printf("[SENSOR] step 3: before MAX30102_Init\r\n");
   APP_Print_Int_Pin_Levels("before_max30102_init");
   MAX30102_Init();
-  g_debug_step = DBG_STEP_AFTER_MAX30102_INIT;
   Safe_USB_Printf("[SENSOR] step 4: after MAX30102_Init\r\n");
   APP_Print_Int_Pin_Levels("after_max30102_init");
 
-  /* ---- Step 4: 统一清 PPG/ICM 中断 ---- */
+  /* ---- Step 3: 统一清 PPG/ICM 中断 ---- */
   APP_Clear_PPG_ICM_Interrupts_For_Debug();
-  g_debug_step = DBG_STEP_AFTER_PPG_ICM_CLEAR;
   APP_Print_Int_Pin_Levels("after_clear_ppg_icm_int");
 
-  /* ---- Step 5: MAX30003 ---- */
-  g_debug_step = DBG_STEP_BEFORE_MAX30003_INIT;
+  /* ---- Step 4: MAX30003 ---- */
   Safe_USB_Printf("[SENSOR] step 5: before MAX30003_Init\r\n");
   APP_Print_Int_Pin_Levels("before_max30003_init");
-
   MAX30003_Init();
-
-  g_debug_step = DBG_STEP_AFTER_MAX30003_INIT;
   Safe_USB_Printf("[SENSOR] step 6: after MAX30003_Init\r\n");
 
-  /* 清 ECG 通知和水槽 */
+  /* 清 ECG 通知 */
   while (ulTaskNotifyTake(pdTRUE, 0) > 0) {}
   __HAL_GPIO_EXTI_CLEAR_IT(ECG_INT_Pin);
+
+  /* ---- Step 5: 启用 ICM Data Ready + MAX30102 A_FULL 中断 ---- */
+  ICM20948_EnableDataReadyInterrupt();
+
+  MAX30102_ClearInterruptStatus(NULL, NULL);
+  MAX30102_WriteByte(INTERRUPT_ENABLE1, 0x80);  /* A_FULL_EN */
+  MAX30102_WriteByte(INTERRUPT_ENABLE2, 0x00);
+  Safe_USB_Printf("[MAX30102] A_FULL interrupt enabled\r\n");
+
   ecg_streaming = 1;
 
-  /* ---- Step 6: StartStream + ECG Task + loop ---- */
-  g_debug_step = 220;
+  /* ---- Step 6: MAX30003 StartStream ---- */
   Safe_USB_Printf("[SENSOR] step 7: before MAX30003_StartStream\r\n");
   MAX30003_StartStream();
-  g_debug_step = 250;
   Safe_USB_Printf("[SENSOR] step 8: after MAX30003_StartStream\r\n");
 
-  g_debug_step = 300;
-  Safe_USB_Printf("[SENSOR] step 9: before first MAX30003_Task\r\n");
-  MAX30003_Task();
-  Safe_USB_Printf("[SENSOR] step 10: entering ECG loop\r\n");
+  /* ---- Step 7: 三路事件循环 ---- */
+  MAX30003_Task();  /* 首次轮询 */
 
+  uint32_t notify_value = 0;
   uint32_t last_hb = HAL_GetTick();
 
   for (;;) {
-      (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5));
-      MAX30003_Task();
+      notify_value = 0;
+
+      BaseType_t ok = xTaskNotifyWait(
+          0x00000000UL,
+          SENSOR_EVT_ECG | SENSOR_EVT_PPG | SENSOR_EVT_ICM,
+          &notify_value,
+          pdMS_TO_TICKS(10)
+      );
+
+      if (ok == pdTRUE) {
+          if (notify_value & SENSOR_EVT_ECG) {
+              MAX30003_Task();
+          }
+          if (notify_value & SENSOR_EVT_PPG) {
+              APP_Handle_PPG_Event();
+          }
+          if (notify_value & SENSOR_EVT_ICM) {
+              APP_Handle_ICM_Event();
+          }
+      } else {
+          /* fallback: ECG 轮询防漏 */
+          MAX30003_Task();
+      }
 
       if ((HAL_GetTick() - last_hb) >= 1000) {
           last_hb = HAL_GetTick();
-          g_debug_step = 360;
-          Safe_USB_Printf("[HEARTBEAT] tick=%lu step=%lu ppg=%lu icm=%lu ecg=%lu\r\n",
-                          HAL_GetTick(), g_debug_step,
-                          ppg_irq_count, icm_irq_count, ecg_irq_count);
+          Safe_USB_Printf("[SENSOR] alive ppg_irq=%lu icm_irq=%lu ecg_irq=%lu ecg_idx=%lu\r\n",
+                          ppg_irq_count, icm_irq_count, ecg_irq_count, ecg_buf_idx);
       }
   }
   /* USER CODE END StartTask_Sensor */
@@ -523,6 +559,7 @@ static void APP_Clear_PPG_ICM_Interrupts_For_Debug(void)
   */
 void Packagedata_AddEcgSample(int16_t ecg)
 {
+    static uint32_t ecg_seq = 0;
     static uint32_t dbg_cnt = 0;
 
     if (g_sys_state == SYS_STATE_RECORDING) {
@@ -530,17 +567,87 @@ void Packagedata_AddEcgSample(int16_t ecg)
             ecg_buffer[ecg_buf_idx++] = ecg;
         }
 
-        dbg_cnt++;
+        /* 送入 SD 队列 */
+        SensorRecord_t rec;
+        rec.timestamp_ms = HAL_GetTick();
+        rec.seq = ecg_seq++;
+        rec.type = SENSOR_REC_ECG;
+        rec.data.ecg.ecg = ecg;
+        SDLogger_EnqueueFromTask(&rec);
 
+        dbg_cnt++;
         if ((dbg_cnt % 50) == 0) {
             Safe_USB_Printf("[ECG_BUF] idx=%lu, val=%d\r\n", ecg_buf_idx, ecg);
         }
 
-        /* 20s buffer 满了 → 自动触发 dump */
         if (ecg_buf_idx >= ECG_BUFFER_SIZE) {
             g_sys_state = SYS_STATE_DUMPING;
-            osThreadFlagsSet(Task_EDFHandle, 0x01);
+            if (Task_EDFHandle != NULL) osThreadFlagsSet(Task_EDFHandle, 0x01);
         }
+    }
+}
+
+/* ---- PPG/ICM 事件处理（Sensor task 内调用） ---- */
+
+static void APP_Handle_PPG_Event(void)
+{
+    static uint32_t ppg_seq = 0;
+    uint32_t ir_buf[32];
+    uint32_t red_buf[32];
+
+    if (Mtx_I2C3Handle) osMutexAcquire(Mtx_I2C3Handle, pdMS_TO_TICKS(50));
+
+    uint8_t n = MAX30102_ReadFIFO_Batch(ir_buf, red_buf, 32);
+
+    if (Mtx_I2C3Handle) osMutexRelease(Mtx_I2C3Handle);
+
+    if (n == 0) return;
+
+    for (uint8_t i = 0; i < n; i++) {
+        SensorRecord_t rec;
+        rec.timestamp_ms = HAL_GetTick();
+        rec.seq = ppg_seq++;
+        rec.type = SENSOR_REC_PPG;
+        rec.data.ppg.ir = ir_buf[i];
+        rec.data.ppg.red = red_buf[i];
+        SDLogger_EnqueueFromTask(&rec);
+    }
+
+    if ((ppg_seq % 100) == 0) {
+        Safe_USB_Printf("[PPG] seq=%lu last_ir=%lu last_red=%lu batch=%u\r\n",
+                        ppg_seq, ir_buf[n - 1], red_buf[n - 1], n);
+    }
+}
+
+static void APP_Handle_ICM_Event(void)
+{
+    static uint32_t imu_seq = 0;
+    int16_t ax, ay, az;
+    int16_t gx, gy, gz;
+
+    if (Mtx_I2C3Handle) osMutexAcquire(Mtx_I2C3Handle, pdMS_TO_TICKS(50));
+
+    uint8_t ret = ICM20948_ReadAccelGyroRaw(&ax, &ay, &az, &gx, &gy, &gz);
+
+    if (Mtx_I2C3Handle) osMutexRelease(Mtx_I2C3Handle);
+
+    if (ret != 0) return;
+
+    SensorRecord_t rec;
+    rec.timestamp_ms = HAL_GetTick();
+    rec.seq = imu_seq++;
+    rec.type = SENSOR_REC_IMU;
+    rec.data.imu.ax = ax;
+    rec.data.imu.ay = ay;
+    rec.data.imu.az = az;
+    rec.data.imu.gx = gx;
+    rec.data.imu.gy = gy;
+    rec.data.imu.gz = gz;
+    SDLogger_EnqueueFromTask(&rec);
+
+    if ((imu_seq % 100) == 0) {
+        Safe_USB_Printf("[IMU] seq=%lu ax=%d ay=%d az=%d gx=%d gy=%d gz=%d\r\n",
+                        imu_seq, ax, ay, az, gx, gy, gz);
     }
 }
 

@@ -267,11 +267,12 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
   */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
   if (GPIO_Pin == ECG_INT_Pin) {
     ecg_irq_count++;
     if (ecg_streaming && EcgTaskHandle != NULL) {
-      BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-      vTaskNotifyGiveFromISR(EcgTaskHandle, &xHigherPriorityTaskWoken);
+      xTaskNotifyFromISR(EcgTaskHandle, SENSOR_EVT_ECG, eSetBits, &xHigherPriorityTaskWoken);
       portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     }
     return;
@@ -279,11 +280,19 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
   if (GPIO_Pin == PPG_INT_Pin) {
       ppg_irq_count++;
+      if (EcgTaskHandle != NULL) {
+          xTaskNotifyFromISR(EcgTaskHandle, SENSOR_EVT_PPG, eSetBits, &xHigherPriorityTaskWoken);
+          portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+      }
       return;
   }
 
   if (GPIO_Pin == ICM_INT_Pin) {
       icm_irq_count++;
+      if (EcgTaskHandle != NULL) {
+          xTaskNotifyFromISR(EcgTaskHandle, SENSOR_EVT_ICM, eSetBits, &xHigherPriorityTaskWoken);
+          portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+      }
       return;
   }
 

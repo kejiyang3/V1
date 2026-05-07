@@ -100,6 +100,11 @@ extern volatile uint8_t ecg_streaming;
 #define SD_DETECT_Pin GPIO_PIN_7
 #define SD_DETECT_GPIO_Port GPIOB
 
+/* === 三路传感器事件 bit (用于 xTaskNotifyFromISR) === */
+#define SENSOR_EVT_ECG   (1UL << 0)
+#define SENSOR_EVT_PPG   (1UL << 1)
+#define SENSOR_EVT_ICM   (1UL << 2)
+
 /* USER CODE BEGIN Private defines */
 
 /* ===== MAX30003 心电中断读取配置 ===== */

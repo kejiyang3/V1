@@ -62,6 +62,7 @@ extern "C" {
 /* ========== 对外 API ========== */
 void MAX30102_INT_Init(void);
 ErrorStatus MAX30102_CheckDevice(void);
+ErrorStatus MAX30102_ClearInterruptStatus(uint8_t *status1, uint8_t *status2);
 ErrorStatus MAX30102_WriteByte(uint8_t reg, uint8_t data);
 ErrorStatus MAX30102_WriteBuffer(uint8_t reg, uint8_t *buffer, uint16_t len);
 ErrorStatus MAX30102_ReadBuffer(uint8_t addr, uint8_t *rbuffer, uint16_t len);

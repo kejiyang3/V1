@@ -132,6 +132,54 @@ uint8_t ICM20948_DataReady(void) {
     return (Soft_I2C_ReadReg(ICM20948_ADDR, 0x1A) & 0x01);
 }
 
+/* ---- 中断清除 / Data Ready 使能 / 原始数据读取 ---- */
+
+void ICM20948_ClearInterruptStatus(void)
+{
+    uint8_t tmp;
+    ICM_SelectBank(0);
+    tmp = Soft_I2C_ReadReg(ICM20948_ADDR, 0x19); (void)tmp;
+    tmp = Soft_I2C_ReadReg(ICM20948_ADDR, 0x1A); (void)tmp;
+    tmp = Soft_I2C_ReadReg(ICM20948_ADDR, 0x1B); (void)tmp;
+    tmp = Soft_I2C_ReadReg(ICM20948_ADDR, 0x1C); (void)tmp;
+}
+
+void ICM20948_EnableDataReadyInterrupt(void)
+{
+    ICM_SelectBank(0);
+    /* INT_PIN_CFG: Active Low, Open-Drain (与 I2C 电平转换匹配) */
+    Soft_I2C_WriteReg(ICM20948_ADDR, 0x0F, 0xC0);
+    ICM20948_ClearInterruptStatus();
+    /* INT_ENABLE_1 bit0 = RAW_DATA_0_RDY_EN */
+    Soft_I2C_WriteReg(ICM20948_ADDR, 0x11, 0x01);
+    Safe_USB_Printf("[ICM20948] Data Ready interrupt enabled\r\n");
+}
+
+uint8_t ICM20948_ReadAccelGyroRaw(int16_t *ax, int16_t *ay, int16_t *az,
+                                  int16_t *gx, int16_t *gy, int16_t *gz)
+{
+    uint8_t buf[12];
+    if (!ax || !ay || !az || !gx || !gy || !gz) return 1;
+
+    ICM_SelectBank(0);
+    if (HAL_I2C_Mem_Read(&hi2c3, (ICM20948_ADDR << 1), 0x2D, I2C_MEMADD_SIZE_8BIT, buf, 12, 10) != HAL_OK) {
+        return 1;
+    }
+
+    *ax = (int16_t)((buf[0] << 8) | buf[1]);
+    *ay = (int16_t)((buf[2] << 8) | buf[3]);
+    *az = (int16_t)((buf[4] << 8) | buf[5]);
+    *gx = (int16_t)((buf[6] << 8) | buf[7]);
+    *gy = (int16_t)((buf[8] << 8) | buf[9]);
+    *gz = (int16_t)((buf[10] << 8) | buf[11]);
+
+    raw_ax = *ax; raw_ay = *ay; raw_az = *az;
+    raw_gx = *gx; raw_gy = *gy; raw_gz = *gz;
+
+    ICM20948_ClearInterruptStatus();
+    return 0;
+}
+
 uint8_t ICM20948_Read_Data(void) {
     uint8_t buf[22] = {0};
     int16_t local_ax, local_ay, local_az, local_gx, local_gy, local_gz, local_mx, local_my, local_mz;
