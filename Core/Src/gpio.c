@@ -72,15 +72,15 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(ECG_CS_GPIO_Port, &GPIO_InitStruct);
 
-  /* Configure GPIO pin : ICM_INT_Pin — EXTI 下降沿触发 */
+  /* Configure GPIO pin : ICM_INT_Pin — 暂时改为普通输入，关闭 EXTI */
   GPIO_InitStruct.Pin = ICM_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(ICM_INT_GPIO_Port, &GPIO_InitStruct);
 
-  /* Configure GPIO pin : PPG_INT_Pin — EXTI 下降沿触发 */
+  /* PPG_INT_Pin — 暂时改为普通输入，关闭 EXTI */
   GPIO_InitStruct.Pin = PPG_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(PPG_INT_GPIO_Port, &GPIO_InitStruct);
 
@@ -156,13 +156,7 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(SD_DETECT_GPIO_Port, &GPIO_InitStruct);
 
-  /* EXTI interrupt init — PPG(EXTI2) + ICM(EXTI1) + ECG(EXTI9_5) */
-  HAL_NVIC_SetPriority(EXTI1_IRQn, 5, 0);
-  HAL_NVIC_EnableIRQ(EXTI1_IRQn);
-
-  HAL_NVIC_SetPriority(EXTI2_IRQn, 5, 0);
-  HAL_NVIC_EnableIRQ(EXTI2_IRQn);
-
+  /* EXTI interrupt init — V1 only ECG(EXTI9_5) + Touch(EXTI3) */
   HAL_NVIC_SetPriority(EXTI3_IRQn, 11, 0);
   HAL_NVIC_EnableIRQ(EXTI3_IRQn);
 

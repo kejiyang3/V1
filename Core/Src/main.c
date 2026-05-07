@@ -22,6 +22,7 @@
 #include "../../User/touch.h"
 #include "usbd_cdc_if.h"
 #include "max3003.h"
+#include "ecg_record_control.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,9 +49,7 @@ volatile uint8_t touch_int_flag = 0;
 extern DMA_HandleTypeDef hdma_usart1_rx;  /* Defined in usart.c for USART1 RX DMA */
 
 volatile uint8_t ecg_streaming = 0;             /* ECG流使能标志 */
-volatile uint32_t ecg_irq_count = 0;             /* ECG INTB 中断计数 (调试用) */
-volatile uint32_t ppg_irq_count = 0;             /* PPG_INT 中断计数 (调试用) */
-volatile uint32_t icm_irq_count = 0;             /* ICM_INT 中断计数 (调试用) */
+volatile uint32_t ecg_irq_count = 0;             /* ECG INTB 中断计数 */
 
 /* EcgTask handle (定义在 freertos.c) — 用于ISR→Task直接通知 */
 extern TaskHandle_t EcgTaskHandle;
@@ -259,41 +258,20 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 
 /**
   * @brief GPIO EXTI Callback
-  * @note  ECG_INT (EXTI9_5) handled here — releases ECG semaphore for ISR→Task sync.
-  *        ICM_INT (EXTI1) and PPG_INT (EXTI2) are handled separately.
-  *        INT_TOUCH (EXTI3) is disabled — using polling mode instead.
+  * @note  V1: ONLY handles ECG_INT.
   * @param GPIO_Pin: Pin number that triggered the interrupt
-  * @retval None
   */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-
   if (GPIO_Pin == ECG_INT_Pin) {
     ecg_irq_count++;
+
     if (ecg_streaming && EcgTaskHandle != NULL) {
-      xTaskNotifyFromISR(EcgTaskHandle, SENSOR_EVT_ECG, eSetBits, &xHigherPriorityTaskWoken);
+      BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+      vTaskNotifyGiveFromISR(EcgTaskHandle, &xHigherPriorityTaskWoken);
       portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     }
     return;
-  }
-
-  if (GPIO_Pin == PPG_INT_Pin) {
-      ppg_irq_count++;
-      if (EcgTaskHandle != NULL) {
-          xTaskNotifyFromISR(EcgTaskHandle, SENSOR_EVT_PPG, eSetBits, &xHigherPriorityTaskWoken);
-          portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-      }
-      return;
-  }
-
-  if (GPIO_Pin == ICM_INT_Pin) {
-      icm_irq_count++;
-      if (EcgTaskHandle != NULL) {
-          xTaskNotifyFromISR(EcgTaskHandle, SENSOR_EVT_ICM, eSetBits, &xHigherPriorityTaskWoken);
-          portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-      }
-      return;
   }
 
   (void)GPIO_Pin;

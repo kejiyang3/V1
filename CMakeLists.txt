@@ -87,10 +87,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/User/touch.c
     ${CMAKE_SOURCE_DIR}/User/Config/usb_printf.c
     ${CMAKE_SOURCE_DIR}/Core/Src/max3003.c
-    ${CMAKE_SOURCE_DIR}/Core/Src/icm20948.c
-    ${CMAKE_SOURCE_DIR}/Core/Src/Max30102.c
-    ${CMAKE_SOURCE_DIR}/Core/Src/sd_wav_test.c
-    ${CMAKE_SOURCE_DIR}/Core/Src/sd_sensor_logger.c
+    ${CMAKE_SOURCE_DIR}/Core/Src/ecg_record_control.c
+    ${CMAKE_SOURCE_DIR}/Core/Src/ecg_sd_logger.c
     ${CMAKE_SOURCE_DIR}/App/LVGL/app_lvgl.c
     ${CMAKE_SOURCE_DIR}/App/LVGL/lv_port_disp.c
     ${CMAKE_SOURCE_DIR}/App/LVGL/lv_port_indev.c
@@ -112,6 +110,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     # USER CODE BEGIN INCLUDES
     ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/Core/Inc
     ${CMAKE_SOURCE_DIR}/User/Config
     ${CMAKE_SOURCE_DIR}/User/example
     ${CMAKE_SOURCE_DIR}/User

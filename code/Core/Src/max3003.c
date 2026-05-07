@@ -155,8 +155,7 @@ void MAX30003_Init(void)
     HAL_Delay(1);
     if (MAX30003_ReadReg(MAX30003_INFO, &info3) != HAL_OK) return;
 
-    Safe_USB_Printf("[MAX30003] INFO readback: 0x%06lX / 0x%06lX / 0x%06lX\r\n",
-               info1, info2, info3);
+    Safe_USB_Printf("[MAX30003] INFO=0x%06lX\r\n", info1);
 
     if (!MAX30003_WriteVerify(MAX30003_CNFG_GEN,
                               MAX30003_CNFG_GEN_NORMAL,
@@ -174,7 +173,7 @@ void MAX30003_Init(void)
                               MAX30003_CNFG_ECG_NORMAL,
                               "CNFG_ECG")) return;
 
-    /* 等待 PLL 锁定 (数据手册强烈建议在 SYNCH 之前确保 PLL 锁定) */
+    /* 等待 PLL 锁定 */
     uint8_t retry = 50;
     while(retry--) {
         MAX30003_ReadReg(MAX30003_STATUS, &dummy);
@@ -184,59 +183,37 @@ void MAX30003_Init(void)
 
     if (!MAX30003_WriteVerify(MAX30003_EN_INT,
                               MAX30003_EN_INT_IDLE,
-                              "EN_INT_IDLE")) return;
+                              "EN_INT")) return;
 
     /* EFIT=4，约 5 个样本触发一次中断 */
     if (!MAX30003_WriteVerify(MAX30003_MNGR_INT,
                               MAX30003_MNGR_INT_FAST,
                               "MNGR_INT")) return;
 
-    /* 清 FIFO 并同步，无需 Delay，防止 FIFO 重新堆积 */
-    Safe_USB_Printf("[DBG] before FIFO_RST\r\n");
+    /* 清 FIFO 并同步 */
     MAX30003_FifoReset();
-
-    Safe_USB_Printf("[DBG] after FIFO_RST, before SYNCH\r\n");
     MAX30003_Synch();
 
-    Safe_USB_Printf("[DBG] after SYNCH, reading STATUS\r\n");
-    if (MAX30003_ReadReg(MAX30003_STATUS, &dummy) != HAL_OK) {
-        Safe_USB_Printf("[DBG][ERR] Read STATUS failed after SYNCH\r\n");
-        return;
-    }
-
-    Safe_USB_Printf("[DBG] STATUS after init = 0x%06lX\r\n", dummy);
-    Safe_USB_Printf("[MAX30003] Init done. Waiting for MAX30003_StartStream().\r\n");
+    MAX30003_ReadReg(MAX30003_STATUS, &dummy);
+    Safe_USB_Printf("[MAX30003] Init done. STATUS=0x%06lX\r\n", dummy);
 }
 
 /**
-  * @brief  启动 ECG 采集流 (简化调试版：仅 EN_INT_NORMAL + 读 STATUS)
-  * @note   Init 已完成 FIFO_RST/SYNCH，StartStream 不再重复执行。
+  * @brief  启动 ECG 采集流
   */
 void MAX30003_StartStream(void)
 {
     uint32_t status = 0;
 
-    Safe_USB_Printf("[START] step 1: enter MAX30003_StartStream\r\n");
+    (void)MAX30003_ReadReg(MAX30003_STATUS, &status);
 
-    if (MAX30003_ReadReg(MAX30003_STATUS, &status) == HAL_OK) {
-        Safe_USB_Printf("[START] step 2: STATUS before EN_INT_NORMAL = 0x%06lX\r\n", status);
-    } else {
-        Safe_USB_Printf("[START][ERR] step 2: read STATUS failed\r\n");
+    if (MAX30003_WriteReg(MAX30003_EN_INT, MAX30003_EN_INT_NORMAL) != HAL_OK) {
+        Safe_USB_Printf("[MAX30003][ERR] StartStream write EN_INT failed\r\n");
+        return;
     }
 
-    if (MAX30003_WriteReg(MAX30003_EN_INT, MAX30003_EN_INT_NORMAL) == HAL_OK) {
-        Safe_USB_Printf("[START] step 3: EN_INT_NORMAL written\r\n");
-    } else {
-        Safe_USB_Printf("[START][ERR] step 3: EN_INT_NORMAL write failed\r\n");
-    }
-
-    if (MAX30003_ReadReg(MAX30003_STATUS, &status) == HAL_OK) {
-        Safe_USB_Printf("[START] step 4: STATUS after EN_INT_NORMAL = 0x%06lX\r\n", status);
-    } else {
-        Safe_USB_Printf("[START][ERR] step 4: read STATUS after enable failed\r\n");
-    }
-
-    Safe_USB_Printf("[START] step 5: leave MAX30003_StartStream\r\n");
+    MAX30003_ReadReg(MAX30003_STATUS, &status);
+    Safe_USB_Printf("[MAX30003] Stream started. STATUS=0x%06lX\r\n", status);
 }
 
 /**
@@ -250,7 +227,7 @@ void MAX30003_StopStream(void)
     MAX30003_FifoReset();
     MAX30003_ReadReg(MAX30003_STATUS, &dummy);
 
-    Safe_USB_Printf("[MAX30003] Stream stopped.\r\n");
+    Safe_USB_Printf("[MAX30003] Stream stopped\r\n");
 }
 
 /**
@@ -309,51 +286,36 @@ static HAL_StatusTypeDef MAX30003_ReadFifoBurst(uint32_t *samples, uint8_t max_s
 }
 
 /**
-  * @brief  提取并处理 MAX30003 FIFO 数据 (由 EXTI 下降沿唤醒后调用)
+  * @brief  提取并处理 MAX30003 FIFO 数据
   * @note   Burst 读 FIFO，一次 32 word；避免在采样路径里调用阻塞/打印函数。
   */
 void MAX30003_Task(void)
 {
     uint32_t status_reg = 0;
-    static uint32_t call_count = 0;
     static uint32_t ovf_count = 0;
     static uint32_t pll_warn_count = 0;
     static uint32_t sample_count = 0;
-    extern volatile uint32_t ecg_irq_count;
-
-    call_count++;
 
     if (MAX30003_ReadReg(MAX30003_STATUS, &status_reg) != HAL_OK) {
-        Safe_USB_Printf("[ECG_TASK][ERR] Read STATUS failed\r\n");
         return;
     }
 
-    /* 每 200 次轮询打印一次 STATUS 心跳 */
-    if ((call_count % 200) == 0) {
-        Safe_USB_Printf("[ECG_TASK] alive call=%lu STATUS=0x%06lX irq=%lu samples=%lu\r\n",
-                   call_count, status_reg, ecg_irq_count, sample_count);
-    }
-
-    /* 最高优先级：处理 FIFO overflow (数据手册要求 EOVF 后必须 FIFO_RST 或 SYNCH) */
+    /* 处理 FIFO overflow */
     if (status_reg & MAX30003_STATUS_EOVF) {
         ovf_count++;
-
-        Safe_USB_Printf("[MAX30003][WARN] EOVF, STATUS=0x%06lX, ovf=%lu\r\n", status_reg, ovf_count);
-
+        Safe_USB_Printf("[MAX30003][WARN] EOVF ovf=%lu\r\n", ovf_count);
         MAX30003_FifoReset();
         MAX30003_Synch();
-
         uint32_t dummy = 0;
         MAX30003_ReadReg(MAX30003_STATUS, &dummy);
         return;
     }
 
-    /* PLLINT 仅限频报警，不可在此处 return，否则 FIFO 数据无法清空导致溢出 */
+    /* PLLINT 仅限频报警 */
     if (status_reg & MAX30003_STATUS_PLLINT) {
         pll_warn_count++;
-
         if (pll_warn_count <= 3 || (pll_warn_count % 200) == 0) {
-            Safe_USB_Printf("[MAX30003][WARN] PLLINT observed. STATUS=0x%06lX, pll=%lu\r\n",
+            Safe_USB_Printf("[MAX30003][WARN] PLLINT observed. STATUS=0x%06lX pll=%lu\r\n",
                        status_reg, pll_warn_count);
         }
     }
@@ -361,8 +323,6 @@ void MAX30003_Task(void)
     if ((status_reg & MAX30003_STATUS_EINT) == 0) {
         return;
     }
-
-    Safe_USB_Printf("[MAX30003][DBG] EINT detected, reading FIFO...\r\n");
 
     uint32_t samples[FIFO_BURST_SIZE];
 
@@ -377,51 +337,36 @@ void MAX30003_Task(void)
 
         if (etag == 0x00 || etag == 0x02) {
             int16_t ecg_val = MAX30003_ConvertData(raw_data);
-
-            /* 非阻塞/轻量缓存函数，切勿在此进行重度 I/O 操作 */
             Packagedata_AddEcgSample(ecg_val);
             sample_count++;
 
-            /* 每 50 个有效样本打印一次 */
-            if ((sample_count % 50) == 0) {
-                Safe_USB_Printf("[ECG] sample=%lu, val=%d, etag=0x%02X, raw=0x%06lX\r\n",
-                           sample_count, ecg_val, etag, raw_data);
-            }
-
-            if (etag == 0x02) { // Last Valid Sample (EOF)
+            if (etag == 0x02) {
                 break;
             }
         }
         else if (etag == 0x01 || etag == 0x03) {
-            /* Fast mode sample：时间有效，但电压值无效。当前直接丢弃电压。 */
-            if (etag == 0x03) { // Last Fast Mode Sample (EOF)
+            if (etag == 0x03) {
                 break;
             }
         }
         else if (etag == 0x06) {
-            /* FIFO Empty */
-            Safe_USB_Printf("[MAX30003][DBG] ETAG=0x06 FIFO empty\r\n");
             break;
         }
         else if (etag == 0x07) {
-            /* FIFO Overflow tag */
             ovf_count++;
-
-            Safe_USB_Printf("[MAX30003][WARN] ETAG overflow, reset FIFO. ovf=%lu\r\n", ovf_count);
-
+            Safe_USB_Printf("[MAX30003][WARN] ETAG ovf ovf=%lu\r\n", ovf_count);
             MAX30003_FifoReset();
             MAX30003_Synch();
             break;
         }
         else {
-            Safe_USB_Printf("[MAX30003][DBG] unknown ETAG=0x%02X, raw=0x%06lX\r\n", etag, raw_data);
             break;
         }
     }
 
-    /* 每 512 个样本打印一次心跳状态，确认采集流水线正常 */
-    if ((sample_count % 512) == 0 && sample_count != 0) {
-        Safe_USB_Printf("[MAX30003] ECG samples=%lu, ovf=%lu, pll=%lu\r\n",
+    /* 每 1024 个样本打印一次心跳 */
+    if ((sample_count % 1024) == 0 && sample_count != 0) {
+        Safe_USB_Printf("[MAX30003] samples=%lu ovf=%lu pll=%lu\r\n",
                    sample_count, ovf_count, pll_warn_count);
     }
 }

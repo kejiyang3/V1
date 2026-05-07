@@ -69,10 +69,8 @@ extern volatile uint8_t ecg_streaming;
 #define ECG_CS_GPIO_Port GPIOC
 #define ICM_INT_Pin GPIO_PIN_1
 #define ICM_INT_GPIO_Port GPIOH
-#define ICM_INT_EXTI_IRQn EXTI1_IRQn
 #define PPG_INT_Pin GPIO_PIN_2
 #define PPG_INT_GPIO_Port GPIOC
-#define PPG_INT_EXTI_IRQn EXTI2_IRQn
 #define KEY_BTN_Pin GPIO_PIN_1
 #define KEY_BTN_GPIO_Port GPIOA
 #define LCD_RST_Pin GPIO_PIN_2
@@ -100,26 +98,11 @@ extern volatile uint8_t ecg_streaming;
 #define SD_DETECT_Pin GPIO_PIN_7
 #define SD_DETECT_GPIO_Port GPIOB
 
-/* === 三路传感器事件 bit (用于 xTaskNotifyFromISR) === */
-#define SENSOR_EVT_ECG   (1UL << 0)
-#define SENSOR_EVT_PPG   (1UL << 1)
-#define SENSOR_EVT_ICM   (1UL << 2)
-
 /* USER CODE BEGIN Private defines */
 
 /* ===== MAX30003 心电中断读取配置 ===== */
-#define ECG_SAMPLE_RATE_HZ          512       /* ECG采样率 (由CNFG_ECG配置决定) */
-#define ECG_FIFO_TRIGGER_SAMPLES    10        /* 每次中断触发读取的样本数 (匹配MNGR_INT EFIT) */
-#define ECG_DOUBLE_BUF_SAMPLES      256       /* 双缓冲每个缓冲区样本数 (≈0.5s@512Hz) */
+#define ECG_SAMPLE_RATE_HZ          512       /* ECG采样率 */
 
-/* MAX30003 EN_INT 寄存器: 启用硬件中断，INTB输出为推挽高电平有效
- * Bit 23(EN_EINT)=1, Bit 1:0(INTB_TYPE)=10(active high)
- * 配合STM32 EXTI上升沿触发 (GPIO_MODE_IT_RISING) */
-#define ECG_INT_EN_VALUE            0x800002UL
-
-/** USB CDC 发送包格式 (每包) */
-#define ECG_USB_TAG                 0xEC      /* 同步头标签 */
-#define ECG_USB_TYPE_ECG            0x01      /* 数据类型: ECG波形 */
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
