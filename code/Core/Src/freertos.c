@@ -309,15 +309,14 @@ void StartTask_Sensor(void *argument)
   __HAL_GPIO_EXTI_CLEAR_IT(ECG_INT_Pin);
   ecg_streaming = 1;
 
-  /* ---- Step 6: StartStream ---- */
-  g_debug_step = DBG_STEP_BEFORE_START_STREAM;
+  /* ---- Step 6: StartStream + ECG Task + loop ---- */
+  g_debug_step = 220;
   Safe_USB_Printf("[SENSOR] step 7: before MAX30003_StartStream\r\n");
   MAX30003_StartStream();
-  g_debug_step = DBG_STEP_LEAVE_START_STREAM;
+  g_debug_step = 250;
   Safe_USB_Printf("[SENSOR] step 8: after MAX30003_StartStream\r\n");
 
-  /* ---- Step 7: first ECG Task + loop ---- */
-  g_debug_step = DBG_STEP_ENTER_FIRST_ECG_TASK;
+  g_debug_step = 300;
   Safe_USB_Printf("[SENSOR] step 9: before first MAX30003_Task\r\n");
   MAX30003_Task();
   Safe_USB_Printf("[SENSOR] step 10: entering ECG loop\r\n");
@@ -330,7 +329,7 @@ void StartTask_Sensor(void *argument)
 
       if ((HAL_GetTick() - last_hb) >= 1000) {
           last_hb = HAL_GetTick();
-          g_debug_step = DBG_STEP_ECG_LOOP_ALIVE;
+          g_debug_step = 360;
           Safe_USB_Printf("[HEARTBEAT] tick=%lu step=%lu ppg=%lu icm=%lu ecg=%lu\r\n",
                           HAL_GetTick(), g_debug_step,
                           ppg_irq_count, icm_irq_count, ecg_irq_count);
@@ -553,6 +552,8 @@ void Packagedata_AddEcgSample(int16_t ecg)
   * @brief  RTOS-Safe USB CDC Print (Industrial Grade)
   * @note   Static buffer + mutex, 增加了空指针和 USB 掉线终极防护
   */
+static osMutexId_t usb_print_mutex = NULL;
+
 void Safe_USB_Printf(const char *format, ...)
 {
     char usb_tx_buf[384];
@@ -560,14 +561,26 @@ void Safe_USB_Printf(const char *format, ...)
 
     if (format == NULL) return;
 
-    /* RTOS 未启动时不使用互斥锁（HAL_Delay 也不要用） */
     osKernelState_t kernel_state = osKernelGetState();
     uint8_t rtos_running = (kernel_state == osKernelRunning) ? 1 : 0;
+
+    /* 延时初始化互斥锁 (仅在 RTOS 启动后) */
+    if (rtos_running && usb_print_mutex == NULL) {
+        osMutexAttr_t attr = { .name = "USB_Print_Mutex" };
+        usb_print_mutex = osMutexNew(&attr);
+    }
+
+    /* 获取互斥锁 (有限等待 50ms，避免死锁) */
+    if (rtos_running && usb_print_mutex != NULL) {
+        if (osMutexAcquire(usb_print_mutex, pdMS_TO_TICKS(50)) != osOK) {
+            return;
+        }
+    }
 
     /* USB 未配置直接丢弃 */
     if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED ||
         hUsbDeviceFS.pClassData == NULL) {
-        return;
+        goto exit;
     }
 
     /* 格式化 */
@@ -576,30 +589,38 @@ void Safe_USB_Printf(const char *format, ...)
     int len = vsnprintf(usb_tx_buf, sizeof(usb_tx_buf), format, args);
     va_end(args);
 
-    if (len <= 0) return;
+    if (len <= 0) goto exit;
     if (len >= (int)sizeof(usb_tx_buf)) {
         len = (int)sizeof(usb_tx_buf) - 1;
         usb_tx_buf[len] = '\0';
     }
 
-    /* 带重试的发送 */
-    for (int retry = 0; retry < 3; retry++) {
-        uint8_t ret = CDC_Transmit_FS((uint8_t*)usb_tx_buf, (uint16_t)len);
-        if (ret == USBD_OK) break;
-
-        if (rtos_running) {
-            osDelay(2);
-        } else {
-            /* RTOS 未启动时的短延时 (约 2ms) */
-            for (volatile uint32_t i = 0; i < 4000; i++);
-        }
+    /* 发送前等待前一次传输完成 (TxState 清 0) */
+    USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
+    int32_t wait = 50;
+    while (hcdc->TxState != 0 && wait > 0) {
+        if (rtos_running) osDelay(1); else { for (volatile uint32_t i = 0; i < 2000; i++); }
+        wait--;
+    }
+    if (hcdc->TxState != 0) {
+        hcdc->TxState = 0;  /* 超时强制清除，允许继续发送 */
     }
 
-    /* 发送后等待 USB 处理完成，避免连续发送被截断 */
-    if (rtos_running) {
-        osDelay(2);
-    } else {
-        for (volatile uint32_t i = 0; i < 4000; i++);
+    CDC_Transmit_FS((uint8_t*)usb_tx_buf, (uint16_t)len);
+
+    /* 发送后等待传输完成，避免下一包因 TxState 忙而丢弃 */
+    wait = 50;
+    while (hcdc->TxState != 0 && wait > 0) {
+        if (rtos_running) osDelay(1); else { for (volatile uint32_t i = 0; i < 2000; i++); }
+        wait--;
+    }
+    if (hcdc->TxState != 0) {
+        hcdc->TxState = 0;  /* 超时强制清除 */
+    }
+
+exit:
+    if (rtos_running && usb_print_mutex != NULL) {
+        osMutexRelease(usb_print_mutex);
     }
 }
 /**
