@@ -26,6 +26,9 @@
 /* External variable for USB streaming status */
 extern volatile uint8_t is_usb_streaming;
 
+/* For osKernelGetState / osDelay in blocking transmit */
+#include "cmsis_os.h"
+
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -333,6 +336,78 @@ static int8_t CDC_TransmitCplt_FS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
+/**
+  * @brief  CDC_Transmit_FS_Blocking
+  *         阻塞式 USB CDC 发送，带超时。
+  * @param  Buf: 数据缓冲区
+  * @param  Len: 数据长度（字节）
+  * @param  timeout_ms: 超时时间（ms），0 表示无限等待
+  * @retval USBD_OK 成功, USBD_BUSY 超时, USBD_FAIL 参数错误/USB未就绪
+  */
+uint8_t CDC_Transmit_FS_Blocking(uint8_t *Buf, uint16_t Len, uint32_t timeout_ms)
+{
+    uint32_t start = HAL_GetTick();
+
+    if (Buf == NULL || Len == 0) {
+        return USBD_FAIL;
+    }
+
+    /* 等待前一次传输完成（等待 TxState == 0） */
+    while (1) {
+        if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED ||
+            hUsbDeviceFS.pClassData == NULL) {
+            return USBD_FAIL;
+        }
+
+        USBD_CDC_HandleTypeDef *hcdc =
+            (USBD_CDC_HandleTypeDef *)hUsbDeviceFS.pClassData;
+
+        if (hcdc->TxState == 0) {
+            break;
+        }
+
+        if (timeout_ms != 0 && (HAL_GetTick() - start) >= timeout_ms) {
+            return USBD_BUSY;
+        }
+
+        if (osKernelGetState() == osKernelRunning) {
+            osDelay(1);
+        } else {
+            HAL_Delay(1);
+        }
+    }
+
+    /* 发起发送 */
+    uint8_t ret = CDC_Transmit_FS(Buf, Len);
+    if (ret != USBD_OK) {
+        return ret;
+    }
+
+    /* 等待发送完成（等待 TxState == 0） */
+    while (1) {
+        if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED ||
+            hUsbDeviceFS.pClassData == NULL) {
+            return USBD_FAIL;
+        }
+
+        USBD_CDC_HandleTypeDef *hcdc =
+            (USBD_CDC_HandleTypeDef *)hUsbDeviceFS.pClassData;
+
+        if (hcdc->TxState == 0) {
+            return USBD_OK;
+        }
+
+        if (timeout_ms != 0 && (HAL_GetTick() - start) >= timeout_ms) {
+            return USBD_BUSY;
+        }
+
+        if (osKernelGetState() == osKernelRunning) {
+            osDelay(1);
+        } else {
+            HAL_Delay(1);
+        }
+    }
+}
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
 /**

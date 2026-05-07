@@ -17,8 +17,10 @@
 #include "app_lvgl.h"
 #include "max3003.h"
 #include "usbd_cdc_if.h"
+#include "usbd_core.h"
 #include "ecg_record_control.h"
 #include "ecg_sd_logger.h"
+#include "ecg_usb_dump.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -57,6 +59,10 @@ typedef enum {
 } SysState_t;
 
 volatile SysState_t g_sys_state = SYS_STATE_IDLE;
+/* USB TX 统计计数器 */
+volatile uint32_t usb_tx_ok_count = 0;
+volatile uint32_t usb_tx_busy_count = 0;
+volatile uint32_t usb_tx_drop_count = 0;
 /* USER CODE END Variables */
 
 /* Definitions for Task_LVGL */
@@ -98,8 +104,15 @@ const osThreadAttr_t Task_BLE_attributes = {
 osThreadId_t Task_ECG_SDWriterHandle;
 const osThreadAttr_t Task_ECG_SDWriter_attributes = {
   .name = "Task_ECG_SDWriter",
-  .stack_size = 2048 * 4,
+  .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
+};
+/* Definitions for Task_ECG_USBDump */
+osThreadId_t Task_ECG_USBDumpHandle;
+const osThreadAttr_t Task_ECG_USBDump_attributes = {
+  .name = "Task_ECG_USBDump",
+  .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for Mtx_SDCard */
 osMutexId_t Mtx_SDCardHandle;
@@ -163,6 +176,7 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_THREADS */
   Task_ECG_SDWriterHandle = osThreadNew(StartTask_ECG_SDWriter, NULL, &Task_ECG_SDWriter_attributes);
+  Task_ECG_USBDumpHandle = osThreadNew(StartTask_ECG_USBDump, NULL, &Task_ECG_USBDump_attributes);
   /* USER CODE END RTOS_THREADS */
 }
 
@@ -328,6 +342,11 @@ void StartTask_BLE(void *argument)
   /* USER CODE BEGIN StartTask_BLE */
   (void)argument;
 
+  /* USB 健康检查 — 快照变量 */
+  static uint32_t last_usb_check = 0;
+  static uint32_t last_busy_snapshot = 0;
+  extern USBD_HandleTypeDef hUsbDeviceFS;
+
   for(;;) {
     if (ble_rx_flag) {
       if (ble_rx_len < BLE_RX_BUF_SIZE) {
@@ -338,6 +357,32 @@ void StartTask_BLE(void *argument)
       ble_rx_flag = 0;
       ble_rx_len = 0;
     }
+
+    /* ========== USB 健康检查：每 5 秒执行一次 ========== */
+    if ((HAL_GetTick() - last_usb_check) >= 5000) {
+        last_usb_check = HAL_GetTick();
+
+        if (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) {
+            uint32_t busy_diff = usb_tx_busy_count - last_busy_snapshot;
+            last_busy_snapshot = usb_tx_busy_count;
+
+            if (busy_diff > 10) {
+                /* USB TX 连续超限 → 状态机卡死，执行恢复 */
+                taskENTER_CRITICAL();
+                USBD_Stop(&hUsbDeviceFS);
+                USBD_Start(&hUsbDeviceFS);
+                taskEXIT_CRITICAL();
+
+                usb_tx_busy_count = 0;
+                usb_tx_drop_count = 0;
+                Safe_USB_Printf("[USB] CDC 状态机重置完成\r\n");
+            }
+        } else {
+            /* USB 未连接，仅更新快照 */
+            last_busy_snapshot = usb_tx_busy_count;
+        }
+    }
+
     osDelay(10);
   }
   /* USER CODE END StartTask_BLE */
@@ -368,95 +413,92 @@ void Packagedata_AddEcgSample(int16_t ecg)
 
 /**
   * @brief  打印 ECG 存储摘要信息 (USB Info 按钮)
+  * @note   g_usb_info_press_count 定义在 app_lvgl.c，声明在 app_lvgl.h
   */
 static void APP_Print_ECG_Storage_Info(void)
 {
   uint32_t now = HAL_GetTick();
   uint32_t duration = 0;
+  char buf[512];
 
   if (g_ecg_rec.start_tick > 0) {
     duration = now - g_ecg_rec.start_tick;
   }
 
-  Safe_USB_Printf("\r\n[ECG_INFO]\r\n");
-  Safe_USB_Printf("state=%d\r\n", g_ecg_rec.state);
-  Safe_USB_Printf("file=%s\r\n", g_ecg_rec.file_name);
-  Safe_USB_Printf("duration_ms=%lu\r\n", duration);
-  Safe_USB_Printf("sample_count=%lu\r\n", g_ecg_rec.ecg_sample_count);
-  Safe_USB_Printf("written_count=%lu\r\n", g_ecg_rec.ecg_written_count);
-  Safe_USB_Printf("drop_count=%lu\r\n", g_ecg_rec.ecg_drop_count);
-  Safe_USB_Printf("sd_bytes=%lu\r\n", g_ecg_rec.sd_write_bytes);
-  Safe_USB_Printf("sync_count=%lu\r\n", g_ecg_rec.sd_sync_count);
-  Safe_USB_Printf("ecg_irq=%lu\r\n", ecg_irq_count);
-  Safe_USB_Printf("[/ECG_INFO]\r\n");
+  int n = snprintf(buf, sizeof(buf),
+    "\r\n[ECG_INFO] press=%lu\r\n"
+    "state=%d\r\n"
+    "file=%s\r\n"
+    "duration_ms=%lu\r\n"
+    "sample_count=%lu\r\n"
+    "written_count=%lu\r\n"
+    "drop_count=%lu\r\n"
+    "sd_bytes=%lu\r\n"
+    "sync_count=%lu\r\n"
+    "ecg_irq=%lu\r\n"
+    "tx_ok=%lu\r\n"
+    "tx_busy=%lu\r\n"
+    "tx_drop=%lu\r\n"
+    "[/ECG_INFO]\r\n",
+    g_usb_info_press_count,
+    g_ecg_rec.state,
+    g_ecg_rec.file_name,
+    duration,
+    g_ecg_rec.ecg_sample_count,
+    g_ecg_rec.ecg_written_count,
+    g_ecg_rec.ecg_drop_count,
+    g_ecg_rec.sd_write_bytes,
+    g_ecg_rec.sd_sync_count,
+    ecg_irq_count,
+    usb_tx_ok_count,
+    usb_tx_busy_count,
+    usb_tx_drop_count
+  );
+
+  if (n > 0) {
+    Safe_USB_Printf("%s", buf);
+  }
 }
 
 /**
-  * @brief  RTOS-Safe USB CDC Print
+  * @brief  Safe_USB_Printf — 调试日志打印
+  * @note   使用 CDC_Transmit_FS_Blocking 阻塞发送，带 200ms 超时。
+  *         仅在采样停止后使用，采样进行中不要高频调用。
   */
-static osMutexId_t usb_print_mutex = NULL;
-
 void Safe_USB_Printf(const char *format, ...)
 {
-  char usb_tx_buf[384];
+  char buf[384];
   extern USBD_HandleTypeDef hUsbDeviceFS;
 
   if (format == NULL) return;
 
-  osKernelState_t kernel_state = osKernelGetState();
-  uint8_t rtos_running = (kernel_state == osKernelRunning) ? 1 : 0;
-
-  if (rtos_running && usb_print_mutex == NULL) {
-    osMutexAttr_t attr = { .name = "USB_Print_Mutex" };
-    usb_print_mutex = osMutexNew(&attr);
-  }
-
-  if (rtos_running && usb_print_mutex != NULL) {
-    if (osMutexAcquire(usb_print_mutex, pdMS_TO_TICKS(50)) != osOK) {
-      return;
-    }
-  }
-
+  /* USB 未配置时直接丢弃 */
   if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED ||
       hUsbDeviceFS.pClassData == NULL) {
-    goto exit;
+    usb_tx_drop_count++;
+    return;
   }
 
+  /* 格式化 */
   va_list args;
   va_start(args, format);
-  int len = vsnprintf(usb_tx_buf, sizeof(usb_tx_buf), format, args);
+  int len = vsnprintf(buf, sizeof(buf), format, args);
   va_end(args);
 
-  if (len <= 0) goto exit;
-  if (len >= (int)sizeof(usb_tx_buf)) {
-    len = (int)sizeof(usb_tx_buf) - 1;
-    usb_tx_buf[len] = '\0';
+  if (len <= 0) return;
+  if (len >= (int)sizeof(buf)) {
+    len = (int)sizeof(buf) - 1;
+    buf[len] = '\0';
   }
 
-  USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
-  int32_t wait = 50;
-  while (hcdc->TxState != 0 && wait > 0) {
-    if (rtos_running) osDelay(1); else { for (volatile uint32_t i = 0; i < 2000; i++); }
-    wait--;
-  }
-  if (hcdc->TxState != 0) {
-    hcdc->TxState = 0;
-  }
-
-  CDC_Transmit_FS((uint8_t*)usb_tx_buf, (uint16_t)len);
-
-  wait = 50;
-  while (hcdc->TxState != 0 && wait > 0) {
-    if (rtos_running) osDelay(1); else { for (volatile uint32_t i = 0; i < 2000; i++); }
-    wait--;
-  }
-  if (hcdc->TxState != 0) {
-    hcdc->TxState = 0;
-  }
-
-exit:
-  if (rtos_running && usb_print_mutex != NULL) {
-    osMutexRelease(usb_print_mutex);
+  /* 阻塞发送 (200ms 超时) */
+  uint8_t ret = CDC_Transmit_FS_Blocking((uint8_t*)buf, (uint16_t)len, 200);
+  if (ret == USBD_OK) {
+    usb_tx_ok_count++;
+  } else if (ret == USBD_BUSY) {
+    usb_tx_busy_count++;
+  } else {
+    usb_tx_drop_count++;
   }
 }
 

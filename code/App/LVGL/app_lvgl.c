@@ -14,6 +14,7 @@
 #include "../../User/touch.h"
 #include "../../User/Config/usb_printf.h"
 #include "ecg_record_control.h"
+#include "ecg_usb_dump.h"
 
 /* ----- UI objects ----- */
 static lv_obj_t *ui_label_title;
@@ -39,11 +40,14 @@ static void btn_start_cb(lv_event_t *e)
     }
 }
 
-/* ----- USB Info button callback ----- */
-static void btn_info_cb(lv_event_t *e)
+/* ----- USB Send ECG File button callback ----- */
+uint32_t g_usb_info_press_count = 0;  /* 按下次数计数（外部引用，供 freertos.c 打印） */
+
+static void btn_usb_send_cb(lv_event_t *e)
 {
     (void)e;
-    ECG_RequestUsbInfo();
+    g_usb_info_press_count++;
+    ECG_USB_RequestDump();
 }
 
 /* ----- UI update timer (500ms) ----- */
@@ -159,7 +163,7 @@ void App_LVGL_TestUI(void)
 
     lv_obj_add_event_cb(ui_btn_start, btn_start_cb, LV_EVENT_CLICKED, NULL);
 
-    /* ---- USB Info button (below) ---- */
+    /* ---- USB Send ECG File button (below) ---- */
     ui_btn_info = lv_btn_create(lv_scr_act());
     lv_obj_set_size(ui_btn_info, 160, 44);
     lv_obj_align(ui_btn_info, LV_ALIGN_CENTER, 0, 50);
@@ -168,11 +172,11 @@ void App_LVGL_TestUI(void)
     lv_obj_set_style_radius(ui_btn_info, 12, 0);
 
     ui_btn_info_label = lv_label_create(ui_btn_info);
-    lv_label_set_text(ui_btn_info_label, "USB Print Info");
+    lv_label_set_text(ui_btn_info_label, "USB Send ECG File");
     lv_obj_center(ui_btn_info_label);
     lv_obj_set_style_text_color(ui_btn_info_label, lv_color_hex(0xFFFFFF), 0);
 
-    lv_obj_add_event_cb(ui_btn_info, btn_info_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(ui_btn_info, btn_usb_send_cb, LV_EVENT_CLICKED, NULL);
 
     /* ---- 500ms 定时更新 UI ---- */
     lv_timer_create(ui_update_cb, 500, NULL);

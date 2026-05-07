@@ -32,6 +32,9 @@ void APP_LVGL_Process(void);
  */
 void App_LVGL_TestUI(void);
 
+/** USB Info 按钮按下次数（定义在 app_lvgl.c，供 freertos.c 引用） */
+extern uint32_t g_usb_info_press_count;
+
 #ifdef __cplusplus
 }
 #endif

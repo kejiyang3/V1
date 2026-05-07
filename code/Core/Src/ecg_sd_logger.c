@@ -9,7 +9,7 @@
 extern void Safe_USB_Printf(const char *format, ...);
 extern osMutexId_t Mtx_SDCardHandle;
 
-#define ECG_SD_QUEUE_DEPTH      2048
+#define ECG_SD_QUEUE_DEPTH      1024
 #define ECG_SD_SYNC_EVERY       512
 #define ECG_SD_LINE_BUF_SIZE    64
 
