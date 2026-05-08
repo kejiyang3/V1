@@ -63,6 +63,9 @@ volatile SysState_t g_sys_state = SYS_STATE_IDLE;
 volatile uint32_t usb_tx_ok_count = 0;
 volatile uint32_t usb_tx_busy_count = 0;
 volatile uint32_t usb_tx_drop_count = 0;
+
+/* 任务创建错误掩码 (bit0=LVGL, bit1=Sensor, bit2=SDWriter, bit3=USBDump, bit4=Audio, bit5=Button, bit6=BLE) */
+volatile uint32_t g_task_create_error = 0;
 /* USER CODE END Variables */
 
 /* Definitions for Task_LVGL */
@@ -128,9 +131,7 @@ static void APP_Print_ECG_Storage_Info(void);
 
 void StartTask_LVGL(void *argument);
 void StartTask_Sensor(void *argument);
-void StartTask_Audio(void *argument);
 void StartTask_Button(void *argument);
-void StartTask_BLE(void *argument);
 
 extern void MX_USB_DEVICE_Init(void);
 void MX_FREERTOS_Init(void);
@@ -161,22 +162,21 @@ void MX_FREERTOS_Init(void) {
   /* Create the thread(s) */
   /* creation of Task_LVGL */
   Task_LVGLHandle = osThreadNew(StartTask_LVGL, NULL, &Task_LVGL_attributes);
+  if (Task_LVGLHandle == NULL) g_task_create_error |= (1UL << 0);
 
   /* creation of Task_Sensor */
   Task_SensorHandle = osThreadNew(StartTask_Sensor, NULL, &Task_Sensor_attributes);
-
-  /* creation of Task_Audio */
-  Task_AudioHandle = osThreadNew(StartTask_Audio, NULL, &Task_Audio_attributes);
+  if (Task_SensorHandle == NULL) g_task_create_error |= (1UL << 1);
 
   /* creation of Task_Button */
   Task_ButtonHandle = osThreadNew(StartTask_Button, NULL, &Task_Button_attributes);
-
-  /* creation of Task_BLE */
-  Task_BLEHandle = osThreadNew(StartTask_BLE, NULL, &Task_BLE_attributes);
+  if (Task_ButtonHandle == NULL) g_task_create_error |= (1UL << 5);
 
   /* USER CODE BEGIN RTOS_THREADS */
   Task_ECG_SDWriterHandle = osThreadNew(StartTask_ECG_SDWriter, NULL, &Task_ECG_SDWriter_attributes);
+  if (Task_ECG_SDWriterHandle == NULL) g_task_create_error |= (1UL << 2);
   Task_ECG_USBDumpHandle = osThreadNew(StartTask_ECG_USBDump, NULL, &Task_ECG_USBDump_attributes);
+  if (Task_ECG_USBDumpHandle == NULL) g_task_create_error |= (1UL << 3);
   /* USER CODE END RTOS_THREADS */
 }
 
@@ -196,7 +196,8 @@ void StartTask_LVGL(void *argument)
   __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
 
   /* 3. USB CDC 就绪 */
-  usb_printf("\r\n[SYS] RTOS Started, USB CDC Ready!\r\n");
+  Safe_USB_Printf("\r\n[SYS] RTOS Started, USB CDC Ready!\r\n");
+  Safe_USB_Printf("[TASK_CHECK] create_error_mask=0x%08lX\r\n", g_task_create_error);
 
   /* 4. 初始化 LVGL 显示 + V1 ECG 控制界面 */
   APP_LVGL_Init();
@@ -239,10 +240,23 @@ void StartTask_Sensor(void *argument)
           g_ecg_rec.state == ECG_REC_STOPPED ||
           g_ecg_rec.state == ECG_REC_ERROR) {
 
+        g_ecg_rec.state = ECG_REC_RECORDING;
+        Safe_USB_Printf("[ECG_V1] start requested, waiting for SD open\r\n");
+
+        /* 等待 SDWriter 打开文件，最多 3000ms */
+        uint32_t t0 = HAL_GetTick();
+        while (!g_ecg_rec.sd_file_opened && (HAL_GetTick() - t0 < 3000)) {
+            osDelay(10);
+        }
+
+        if (!g_ecg_rec.sd_file_opened) {
+            g_ecg_rec.state = ECG_REC_ERROR;
+            Safe_USB_Printf("[ECG_V1][ERR] SD file not opened within timeout\r\n");
+            continue;
+        }
+
         ecg_buf_idx = 0;
         g_sys_state = SYS_STATE_RECORDING;
-
-        g_ecg_rec.state = ECG_REC_RECORDING;
 
         /* 清空旧通知 */
         while (ulTaskNotifyTake(pdTRUE, 0) > 0) {}

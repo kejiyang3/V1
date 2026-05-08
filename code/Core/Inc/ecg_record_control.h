@@ -30,6 +30,10 @@ typedef struct {
     volatile uint32_t sd_write_bytes;
     volatile uint32_t sd_sync_count;
 
+    volatile uint8_t sd_file_opened;   /* SDWriter 已打开文件 */
+    volatile uint8_t sd_file_closed;   /* SDWriter 已关闭文件 */
+
+    volatile uint32_t file_seq;        /* 文件序号，用户通过 +/- 调节 */
     char file_name[32];
 } ECG_RecordControl_t;
 
@@ -38,6 +42,7 @@ extern ECG_RecordControl_t g_ecg_rec;
 void ECG_RequestStart(void);
 void ECG_RequestStop(void);
 void ECG_RequestUsbInfo(void);
+void ECG_UpdateFileName(void);
 
 #ifdef __cplusplus
 }

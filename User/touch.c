@@ -8,6 +8,7 @@
 
 /* External I2C handle (defined in main.c) */
 extern I2C_HandleTypeDef hi2c2;
+extern void MX_I2C2_Init(void);  /* 用于 I2C 恢复重初始化 */
 
 /* Global touch data structure */
 TouchPoint_t g_touch;
@@ -49,41 +50,58 @@ uint8_t CST816_Read_Reg(uint8_t reg, uint8_t *buf, uint16_t len)
  * @brief   Initialize CST816 touch controller
  * @note    Performs hardware reset and basic configuration
  ******************************************************************************/
+static void CST816_ResetPin(void)
+{
+    HAL_GPIO_WritePin(RST_TOUCH_GPIO_Port, RST_TOUCH_Pin, GPIO_PIN_RESET);
+    HAL_Delay(20);
+    HAL_GPIO_WritePin(RST_TOUCH_GPIO_Port, RST_TOUCH_Pin, GPIO_PIN_SET);
+    HAL_Delay(100);
+}
+
+static uint8_t CST816_VerifyChip(void)
+{
+    uint8_t chip_id = 0;
+    /* 连续读 3 次，排除 I2C 偶发失败 */
+    for (int i = 0; i < 3; i++) {
+        if (CST816_Read_Reg(CST816_REG_CHIP_ID, &chip_id, 1)) {
+            return 1;
+        }
+        HAL_Delay(10);
+    }
+    return 0;
+}
+
 void CST816_Init(void)
 {
-    /* 1. 极其关键的硬件复位唤醒时序（严格遵守手册时间） */
-    HAL_GPIO_WritePin(RST_TOUCH_GPIO_Port, RST_TOUCH_Pin, GPIO_PIN_RESET);
-    HAL_Delay(10); // 拉低至少 10ms
-    HAL_GPIO_WritePin(RST_TOUCH_GPIO_Port, RST_TOUCH_Pin, GPIO_PIN_SET);
-    HAL_Delay(50); // 拉高后等待至少 50ms，让IC完成启动
+    /* 最多重试 3 次，每次失败后硬件复位 + I2C 恢复 */
+    for (int retry = 0; retry < 3; retry++) {
+        if (retry > 0) {
+            /* 重试时做 I2C 总线复位 */
+            HAL_I2C_DeInit(&hi2c2);
+            HAL_Delay(10);
+            MX_I2C2_Init();
+            HAL_Delay(20);
+        }
 
-    /* 2. 停止自动休眠 (寄存器 0xFE 写 0x01) */
-    CST816_Write_Reg(CST816_REG_DIS_AUTO_SLEEP, 0x01);
+        CST816_ResetPin();
 
-    /* 3. 配置中断模式 (寄存器 0xFA 写 0x60 表示连续报点) */
-    /* Bit6=EnTouch, Bit5=EnChange, Bit4=EnMotion */
-    CST816_Write_Reg(CST816_REG_IRQ_CTRL, 0x60); // 只要按住，中断引脚就会每隔10ms周期性发出低脉冲
+        CST816_Write_Reg(CST816_REG_DIS_AUTO_SLEEP, 0x01);
+        CST816_Write_Reg(CST816_REG_IRQ_CTRL, 0x60);
 
-    /* 4. (可选) 配置报点率 (寄存器 0xEE) - 使用默认值 10ms */
-    /* CST816_Write_Reg(0xEE, 0x01); */ // 默认其实也是1 (10ms)
+        if (CST816_VerifyChip()) {
+            /* 清除可能存在的待处理触摸数据 */
+            uint8_t dummy[6];
+            CST816_Read_Reg(CST816_REG_GESTURE_ID, dummy, 6);
 
-    /* 5. 验证是否通信成功 (读取 Chip ID, 寄存器 0xA7) */
-    uint8_t chip_id = 0;
-    if (CST816_Read_Reg(CST816_REG_CHIP_ID, &chip_id, 1)) {
-        /* 芯片ID读取成功，预期值为 0xB4 或 0xB5 */
-        /* 可在此添加调试输出：usb_printf("[DEBUG] CST816 Chip ID: 0x%02X\\r\\n", chip_id); */
+            g_touch.gesture = 0;
+            g_touch.finger_num = 0;
+            g_touch.x = 0;
+            g_touch.y = 0;
+            g_touch.touch_event = 0;
+            return; /* 初始化成功 */
+        }
     }
-
-    /* 6. 清除可能存在的待处理触摸数据 */
-    uint8_t dummy[6];
-    CST816_Read_Reg(CST816_REG_GESTURE_ID, dummy, 6);
-
-    /* 7. 初始化全局触摸结构体 */
-    g_touch.gesture = 0;
-    g_touch.finger_num = 0;
-    g_touch.x = 0;
-    g_touch.y = 0;
-    g_touch.touch_event = 0;
+    /* 3 次重试均失败 — 触摸不工作，但系统继续运行 */
 }
 
 /******************************************************************************
@@ -159,13 +177,30 @@ uint8_t CST816_Get_XY(void)
  ******************************************************************************/
 uint8_t CST816_GetAction(uint16_t *X, uint16_t *Y, uint8_t *Gesture)
 {
+    static uint8_t s_i2c_err_count = 0;
     uint8_t data[6];
     HAL_StatusTypeDef res = HAL_I2C_Mem_Read(&hi2c2, CST816_I2C_ADDR, CST816_REG_GESTURE_ID,
                                               I2C_MEMADD_SIZE_8BIT, data, 6, 10);
 
     if (res != HAL_OK) {
-        return 0; /* I2C 读取失败 */
+        s_i2c_err_count++;
+        /* 连续 3 次 I2C 失败 → 复位 I2C 外设 + 重新初始化 CST816 */
+        if (s_i2c_err_count >= 3) {
+            s_i2c_err_count = 0;
+            HAL_I2C_DeInit(&hi2c2);
+            HAL_Delay(10);
+            MX_I2C2_Init();
+            HAL_Delay(20);
+            CST816_ResetPin();
+            CST816_Write_Reg(CST816_REG_DIS_AUTO_SLEEP, 0x01);
+            CST816_Write_Reg(CST816_REG_IRQ_CTRL, 0x60);
+            uint8_t dummy[6];
+            CST816_Read_Reg(CST816_REG_GESTURE_ID, dummy, 6);
+        }
+        return 0;
     }
+
+    s_i2c_err_count = 0;  /* 成功，清零错误计数 */
 
     *Gesture = data[0];
     uint8_t finger = data[1] & 0x0F;

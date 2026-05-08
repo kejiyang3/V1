@@ -1,6 +1,6 @@
 /**
  * @file app_lvgl.c
- * @brief LVGL V1 ECG Logger UI — Two buttons
+ * @brief LVGL V1 ECG Logger UI — Two buttons + file number selector
  */
 
 #include "app_lvgl.h"
@@ -22,6 +22,7 @@ static lv_obj_t *ui_label_state;
 static lv_obj_t *ui_label_samples;
 static lv_obj_t *ui_label_written;
 static lv_obj_t *ui_label_drop;
+static lv_obj_t *ui_label_file;
 static lv_obj_t *ui_btn_start;
 static lv_obj_t *ui_btn_start_label;
 static lv_obj_t *ui_btn_info;
@@ -41,13 +42,32 @@ static void btn_start_cb(lv_event_t *e)
 }
 
 /* ----- USB Send ECG File button callback ----- */
-uint32_t g_usb_info_press_count = 0;  /* 按下次数计数（外部引用，供 freertos.c 打印） */
+uint32_t g_usb_info_press_count = 0;
 
 static void btn_usb_send_cb(lv_event_t *e)
 {
     (void)e;
     g_usb_info_press_count++;
     ECG_USB_RequestDump();
+}
+
+/* ----- File number +/- buttons ----- */
+static void btn_file_dec_cb(lv_event_t *e)
+{
+    (void)e;
+    if (g_ecg_rec.file_seq > 1) {
+        g_ecg_rec.file_seq--;
+        ECG_UpdateFileName();
+    }
+}
+
+static void btn_file_inc_cb(lv_event_t *e)
+{
+    (void)e;
+    if (g_ecg_rec.file_seq < 999) {
+        g_ecg_rec.file_seq++;
+        ECG_UpdateFileName();
+    }
 }
 
 /* ----- UI update timer (500ms) ----- */
@@ -74,7 +94,10 @@ static void ui_update_cb(lv_timer_t *timer)
     lv_label_set_text_fmt(ui_label_written, "Written: %lu", g_ecg_rec.ecg_written_count);
     lv_label_set_text_fmt(ui_label_drop,    "Drop: %lu",    g_ecg_rec.ecg_drop_count);
 
-    /* Start/Stop 按钮状态 */
+    /* 文件名 */
+    lv_label_set_text_fmt(ui_label_file, "ecg_%03lu.csv  ", g_ecg_rec.file_seq);
+
+    /* Start/Stop 按钮 */
     if (g_ecg_rec.state == ECG_REC_RECORDING) {
         lv_label_set_text(ui_btn_start_label, "Stop");
         lv_obj_set_style_bg_color(ui_btn_start, lv_color_hex(0xCC3333), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -83,7 +106,7 @@ static void ui_update_cb(lv_timer_t *timer)
         lv_obj_set_style_bg_color(ui_btn_start, lv_color_hex(0x33AA33), LV_PART_MAIN | LV_STATE_DEFAULT);
     }
 
-    /* 记录中禁用 USB Info 按钮 */
+    /* 记录中禁用 USB Send */
     if (g_ecg_rec.state == ECG_REC_RECORDING) {
         lv_obj_add_state(ui_btn_info, LV_STATE_DISABLED);
     } else {
@@ -115,6 +138,8 @@ void APP_LVGL_Init(void)
 
 void App_LVGL_TestUI(void)
 {
+    lv_obj_t *ui_btn;
+
     /* Dark background */
     lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x1A1A2E), 0);
 
@@ -123,36 +148,65 @@ void App_LVGL_TestUI(void)
     lv_label_set_text(ui_label_title, "ECG V1 Logger");
     lv_obj_set_style_text_color(ui_label_title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(ui_label_title, &lv_font_montserrat_14, 0);
-    lv_obj_align(ui_label_title, LV_ALIGN_TOP_MID, 0, 15);
+    lv_obj_align(ui_label_title, LV_ALIGN_TOP_MID, 0, 10);
 
     /* ---- Status ---- */
     ui_label_state = lv_label_create(lv_scr_act());
     lv_label_set_text(ui_label_state, "Status: IDLE");
     lv_obj_set_style_text_color(ui_label_state, lv_color_hex(0xAAAAAA), 0);
-    lv_obj_align(ui_label_state, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_align(ui_label_state, LV_ALIGN_TOP_MID, 0, 32);
 
-    /* ---- Samples ---- */
+    /* ---- Samples / Written / Drop ---- */
     ui_label_samples = lv_label_create(lv_scr_act());
     lv_label_set_text(ui_label_samples, "Samples: 0");
     lv_obj_set_style_text_color(ui_label_samples, lv_color_hex(0x88CC88), 0);
-    lv_obj_align(ui_label_samples, LV_ALIGN_TOP_MID, 0, 60);
+    lv_obj_align(ui_label_samples, LV_ALIGN_TOP_MID, 0, 50);
 
-    /* ---- Written ---- */
     ui_label_written = lv_label_create(lv_scr_act());
     lv_label_set_text(ui_label_written, "Written: 0");
     lv_obj_set_style_text_color(ui_label_written, lv_color_hex(0x88CC88), 0);
-    lv_obj_align(ui_label_written, LV_ALIGN_TOP_MID, 0, 78);
+    lv_obj_align(ui_label_written, LV_ALIGN_TOP_MID, 0, 66);
 
-    /* ---- Drop ---- */
     ui_label_drop = lv_label_create(lv_scr_act());
     lv_label_set_text(ui_label_drop, "Drop: 0");
     lv_obj_set_style_text_color(ui_label_drop, lv_color_hex(0xCC8888), 0);
-    lv_obj_align(ui_label_drop, LV_ALIGN_TOP_MID, 0, 96);
+    lv_obj_align(ui_label_drop, LV_ALIGN_TOP_MID, 0, 82);
+
+    /* ---- File number row ---- */
+    /* "-" button */
+    ui_btn = lv_btn_create(lv_scr_act());
+    lv_obj_set_size(ui_btn, 40, 36);
+    lv_obj_align(ui_btn, LV_ALIGN_CENTER, -70, -10);
+    lv_obj_set_style_bg_color(ui_btn, lv_color_hex(0x555555), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(ui_btn, 8, 0);
+    lv_obj_t *lbl_dec = lv_label_create(ui_btn);
+    lv_label_set_text(lbl_dec, "-");
+    lv_obj_center(lbl_dec);
+    lv_obj_set_style_text_color(lbl_dec, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_add_event_cb(ui_btn, btn_file_dec_cb, LV_EVENT_CLICKED, NULL);
+
+    /* filename label */
+    ui_label_file = lv_label_create(lv_scr_act());
+    lv_label_set_text(ui_label_file, "ecg_001.csv  ");
+    lv_obj_set_style_text_color(ui_label_file, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_align(ui_label_file, LV_ALIGN_CENTER, 0, -10);
+
+    /* "+" button */
+    ui_btn = lv_btn_create(lv_scr_act());
+    lv_obj_set_size(ui_btn, 40, 36);
+    lv_obj_align(ui_btn, LV_ALIGN_CENTER, 70, -10);
+    lv_obj_set_style_bg_color(ui_btn, lv_color_hex(0x555555), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(ui_btn, 8, 0);
+    lv_obj_t *lbl_inc = lv_label_create(ui_btn);
+    lv_label_set_text(lbl_inc, "+");
+    lv_obj_center(lbl_inc);
+    lv_obj_set_style_text_color(lbl_inc, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_add_event_cb(ui_btn, btn_file_inc_cb, LV_EVENT_CLICKED, NULL);
 
     /* ---- Start/Stop button (center) ---- */
     ui_btn_start = lv_btn_create(lv_scr_act());
-    lv_obj_set_size(ui_btn_start, 160, 56);
-    lv_obj_align(ui_btn_start, LV_ALIGN_CENTER, 0, -20);
+    lv_obj_set_size(ui_btn_start, 160, 48);
+    lv_obj_align(ui_btn_start, LV_ALIGN_CENTER, 0, 40);
     lv_obj_set_style_bg_color(ui_btn_start, lv_color_hex(0x33AA33), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui_btn_start, 12, 0);
 
@@ -163,10 +217,10 @@ void App_LVGL_TestUI(void)
 
     lv_obj_add_event_cb(ui_btn_start, btn_start_cb, LV_EVENT_CLICKED, NULL);
 
-    /* ---- USB Send ECG File button (below) ---- */
+    /* ---- USB Send ECG File button ---- */
     ui_btn_info = lv_btn_create(lv_scr_act());
-    lv_obj_set_size(ui_btn_info, 160, 44);
-    lv_obj_align(ui_btn_info, LV_ALIGN_CENTER, 0, 50);
+    lv_obj_set_size(ui_btn_info, 160, 40);
+    lv_obj_align(ui_btn_info, LV_ALIGN_CENTER, 0, 95);
     lv_obj_set_style_bg_color(ui_btn_info, lv_color_hex(0x0077CC), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_color(ui_btn_info, lv_color_hex(0x444444), LV_PART_MAIN | LV_STATE_DISABLED);
     lv_obj_set_style_radius(ui_btn_info, 12, 0);

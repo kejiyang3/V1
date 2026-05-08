@@ -63,11 +63,19 @@ static FRESULT ECG_SDLogger_OpenFile(void)
     FRESULT res;
     UINT bw = 0;
 
+    Safe_USB_Printf("[ECG_SD] OpenFile: begin\r\n");
+
     if (Mtx_SDCardHandle != NULL) {
-        osMutexAcquire(Mtx_SDCardHandle, osWaitForever);
+        if (osMutexAcquire(Mtx_SDCardHandle, pdMS_TO_TICKS(2000)) != osOK) {
+            Safe_USB_Printf("[ECG_SD][ERR] SD mutex acquire timeout\r\n");
+            return FR_INT_ERR;
+        }
     }
 
+    Safe_USB_Printf("[ECG_SD] OpenFile: before f_mount\r\n");
     res = f_mount(&SDFatFS, SDPath, 1);
+    Safe_USB_Printf("[ECG_SD] OpenFile: f_mount res=%d\r\n", res);
+
     if (res != FR_OK) {
         if (Mtx_SDCardHandle != NULL) {
             osMutexRelease(Mtx_SDCardHandle);
@@ -75,7 +83,10 @@ static FRESULT ECG_SDLogger_OpenFile(void)
         return res;
     }
 
+    Safe_USB_Printf("[ECG_SD] OpenFile: before f_open %s\r\n", g_ecg_rec.file_name);
     res = f_open(&s_ecg_file, g_ecg_rec.file_name, FA_CREATE_ALWAYS | FA_WRITE);
+    Safe_USB_Printf("[ECG_SD] OpenFile: f_open res=%d\r\n", res);
+
     if (res != FR_OK) {
         if (Mtx_SDCardHandle != NULL) {
             osMutexRelease(Mtx_SDCardHandle);
@@ -84,17 +95,34 @@ static FRESULT ECG_SDLogger_OpenFile(void)
     }
 
     const char *header = "timestamp_ms,seq,ecg\r\n";
+
+    Safe_USB_Printf("[ECG_SD] OpenFile: before header write\r\n");
     res = f_write(&s_ecg_file, header, strlen(header), &bw);
+    Safe_USB_Printf("[ECG_SD] OpenFile: header write res=%d bw=%lu\r\n", res, (uint32_t)bw);
+
     if (res == FR_OK) {
         g_ecg_rec.sd_write_bytes += bw;
     }
 
-    f_sync(&s_ecg_file);
-    s_file_opened = 1;
+    Safe_USB_Printf("[ECG_SD] OpenFile: before f_sync\r\n");
+    FRESULT sync_res = f_sync(&s_ecg_file);
+    Safe_USB_Printf("[ECG_SD] OpenFile: f_sync res=%d\r\n", sync_res);
+
+    if (res == FR_OK && sync_res != FR_OK) {
+        res = sync_res;
+    }
+
+    s_file_opened = (res == FR_OK) ? 1 : 0;
+    if (s_file_opened) {
+        g_ecg_rec.sd_file_opened = 1;
+        g_ecg_rec.sd_file_closed = 0;
+    }
 
     if (Mtx_SDCardHandle != NULL) {
         osMutexRelease(Mtx_SDCardHandle);
     }
+
+    Safe_USB_Printf("[ECG_SD] OpenFile: end res=%d\r\n", res);
 
     return res;
 }
@@ -114,6 +142,7 @@ static void ECG_SDLogger_CloseFile(void)
     f_mount(NULL, SDPath, 1);
 
     s_file_opened = 0;
+    g_ecg_rec.sd_file_closed = 1;
 
     if (Mtx_SDCardHandle != NULL) {
         osMutexRelease(Mtx_SDCardHandle);
@@ -132,11 +161,25 @@ void StartTask_ECG_SDWriter(void *argument)
 
     ECG_SDLogger_InitQueue();
 
+    Safe_USB_Printf("[ECG_SD] task entered\r\n");
+    Safe_USB_Printf("[ECG_SD] queue ready\r\n");
+
+    uint8_t waiting_printed = 0;
+
     for (;;) {
+        waiting_printed = 0;
+
         /* 等待 Start 请求进入 RECORDING 状态 */
         while (g_ecg_rec.state != ECG_REC_RECORDING) {
+            if (!waiting_printed) {
+                Safe_USB_Printf("[ECG_SD] waiting for RECORDING state, current=%d\r\n",
+                                g_ecg_rec.state);
+                waiting_printed = 1;
+            }
             osDelay(50);
         }
+
+        Safe_USB_Printf("[ECG_SD] RECORDING detected, opening file\r\n");
 
         s_stop_requested = 0;
         s_ecg_seq = 0;

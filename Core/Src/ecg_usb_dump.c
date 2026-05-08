@@ -34,6 +34,9 @@ static void ECG_USB_DumpFile_Blocking(void)
     uint32_t total_sent = 0;
     uint8_t partial = 0;
 
+    Safe_USB_Printf("[USB_DUMP] state=%d sd_file_closed=%d file=%s\r\n",
+                    g_ecg_rec.state, g_ecg_rec.sd_file_closed, g_ecg_rec.file_name);
+
     /* 检查状态 — 正在录制时不允许 dump */
     if (g_ecg_rec.state == ECG_REC_RECORDING ||
         g_ecg_rec.state == ECG_REC_STOPPING) {
@@ -125,9 +128,22 @@ void StartTask_ECG_USBDump(void *argument)
 {
     (void)argument;
 
+    Safe_USB_Printf("[USB_DUMP] task entered\r\n");
+
     for (;;) {
         if (s_usb_dump_request) {
             s_usb_dump_request = 0;
+            Safe_USB_Printf("[USB_DUMP] request received\r\n");
+
+            /* SD 文件未关闭时等待 */
+            if (!g_ecg_rec.sd_file_closed) {
+                Safe_USB_Printf("[USB_DUMP][WARN] SD file not closed, waiting\r\n");
+                uint32_t tw = HAL_GetTick();
+                while (!g_ecg_rec.sd_file_closed && (HAL_GetTick() - tw < 3000)) {
+                    osDelay(50);
+                }
+            }
+
             ECG_USB_DumpFile_Blocking();
         }
 
