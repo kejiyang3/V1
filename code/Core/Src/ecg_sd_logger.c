@@ -10,7 +10,7 @@
 #include "app_log.h"
 extern osMutexId_t Mtx_SDCardHandle;
 
-#define ECG_SD_QUEUE_DEPTH      1024
+#define ECG_SD_QUEUE_DEPTH      2048
 #define ECG_SD_SYNC_EVERY       512
 #define ECG_SD_LINE_BUF_SIZE    64
 
@@ -54,7 +54,7 @@ void ECG_SDLogger_Enqueue(int16_t ecg)
 
     g_ecg_rec.ecg_sample_count++;
 
-    if (osMessageQueuePut(Q_ECG_SDHandle, &rec, 0, 0) != osOK) {
+    if (osMessageQueuePut(Q_ECG_SDHandle, &rec, 0, 2) != osOK) {
         g_ecg_rec.ecg_drop_count++;
     }
 }
@@ -245,7 +245,7 @@ void StartTask_ECG_SDWriter(void *argument)
         g_ecg_rec.state = ECG_REC_STOPPED;
         g_ecg_rec.request_stop = 0;
 
-        SD_DebugLog_WriteLine("CAL_TEST_STOPPED");
+        SD_DebugLog_WriteLine("RECORDING_STOPPED");
         SD_DebugLog_WriteSnapshot();
 
         APP_USB_LOG("[ECG_SD] stopped. samples=%lu written=%lu drop=%lu bytes=%lu\r\n",

@@ -63,6 +63,21 @@ void SD_DebugLog_WriteEvent(const char *tag, uint32_t value)
     SD_DebugLog_AppendRaw(buf);
 }
 
+void SD_DebugLog_WriteRegisterSnapshot(const char *tag, uint32_t info, uint32_t status,
+                                        uint32_t gen, uint32_t cal, uint32_t emux,
+                                        uint32_t ecg, uint32_t enint, uint32_t mngr)
+{
+    char buf[256];
+    if (tag == NULL) tag = "REG";
+    snprintf(buf, sizeof(buf),
+             "%lu,REG,tag=%s,INFO=0x%06lX,STATUS=0x%06lX,"
+             "CNFG_GEN=0x%06lX,CNFG_CAL=0x%06lX,CNFG_EMUX=0x%06lX,"
+             "CNFG_ECG=0x%06lX,EN_INT=0x%06lX,MNGR_INT=0x%06lX\r\n",
+             HAL_GetTick(), tag,
+             info, status, gen, cal, emux, ecg, enint, mngr);
+    SD_DebugLog_AppendRaw(buf);
+}
+
 void SD_DebugLog_WriteSnapshot(void)
 {
     char buf[384];

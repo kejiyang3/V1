@@ -4,6 +4,7 @@
 #include "usb_printf.h"
 #include "app_log.h"
 #include "ecg_record_control.h"
+#include "sd_debug_log.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -205,6 +206,8 @@ void MAX30003_Init(void)
 
     MAX30003_ReadReg(MAX30003_STATUS, &dummy);
     APP_USB_LOG("[MAX30003] Init done. STATUS=0x%06lX\r\n", dummy);
+
+    MAX30003_SaveRegisterSnapshotToDebugLog("AFTER_INIT");
 }
 
 /**
@@ -239,6 +242,8 @@ void MAX30003_StartStream(void)
 
     APP_USB_LOG("[MAX30003] StartStream status1=0x%06lX status2=0x%06lX status3=0x%06lX\r\n",
                 status1, status2, status3);
+
+    MAX30003_SaveRegisterSnapshotToDebugLog("AFTER_START");
 }
 
 /**
@@ -258,6 +263,8 @@ void MAX30003_StopStream(void)
     g_ecg_rec.last_status = status;
 
     APP_USB_LOG("[MAX30003] StopStream done. STATUS=0x%06lX\r\n", status);
+
+    MAX30003_SaveRegisterSnapshotToDebugLog("AFTER_STOP");
 }
 
 /**
@@ -416,6 +423,25 @@ int32_t MAX30003_Read_Sample(void)
         return 0;
     }
     return (int32_t)raw_data;
+}
+
+void MAX30003_SaveRegisterSnapshotToDebugLog(const char *tag)
+{
+    uint32_t info = 0, status = 0;
+    uint32_t gen = 0, cal = 0, emux = 0, ecg = 0, enint = 0, mngr = 0;
+
+    MAX30003_ReadReg(MAX30003_INFO, &info);
+    MAX30003_ReadReg(MAX30003_STATUS, &status);
+    MAX30003_ReadReg(MAX30003_CNFG_GEN, &gen);
+    MAX30003_ReadReg(MAX30003_CNFG_CAL, &cal);
+    MAX30003_ReadReg(MAX30003_CNFG_EMUX, &emux);
+    MAX30003_ReadReg(MAX30003_CNFG_ECG, &ecg);
+    MAX30003_ReadReg(MAX30003_EN_INT, &enint);
+    MAX30003_ReadReg(MAX30003_MNGR_INT, &mngr);
+
+    SD_DebugLog_WriteRegisterSnapshot(tag, info, status,
+                                       gen, cal, emux,
+                                       ecg, enint, mngr);
 }
 
 void MAX30003_Diagnostic_Dump(void)
