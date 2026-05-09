@@ -15,12 +15,6 @@ typedef enum {
     ECG_REC_ERROR
 } ECG_RecordState_t;
 
-typedef enum {
-    ECG_TEST_OPEN_INPUT = 0,
-    ECG_TEST_NEAR_SHORT = 1,
-    ECG_TEST_HUMAN_BODY = 2
-} ECG_TestMode_t;
-
 typedef struct {
     volatile ECG_RecordState_t state;
     volatile uint8_t request_start;
@@ -38,6 +32,7 @@ typedef struct {
     volatile uint32_t fifo_eovf_count;
     volatile uint32_t pll_warn_count;
 
+    /* 新增: STATUS / PLL / FIFO 详细诊断 */
     volatile uint32_t last_status;
     volatile uint32_t pll_status_seen_count;
     volatile uint32_t pll_edge_count;
@@ -51,7 +46,6 @@ typedef struct {
 
     volatile uint8_t request_save_info;
 
-    volatile ECG_TestMode_t test_mode;
     volatile uint32_t file_seq;
     char file_name[32];
 } ECG_RecordControl_t;
@@ -62,12 +56,8 @@ void ECG_RequestStart(void);
 void ECG_RequestStop(void);
 void ECG_RequestUsbInfo(void);
 void ECG_RequestSaveInfo(void);
+void ECG_UpdateFileName(void);
 void ECG_ResetStats(void);
-
-void ECG_SetTestMode(ECG_TestMode_t mode);
-void ECG_ToggleTestMode(void);
-const char *ECG_GetTestModeName(void);
-void ECG_UpdateFileNameForNewRecording(void);
 
 #ifdef __cplusplus
 }

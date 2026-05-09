@@ -241,25 +241,6 @@ void StartTask_Sensor(void *argument)
           g_ecg_rec.state == ECG_REC_STOPPED ||
           g_ecg_rec.state == ECG_REC_ERROR) {
 
-        /* 清旧队列 + 重置统计 */
-        ECG_SDLogger_ClearQueue();
-        ECG_ResetStats();
-
-        /* 生成外部测试文件名 */
-        ECG_UpdateFileNameForNewRecording();
-
-        MAX30003_SaveRegisterSnapshotToDebugLog("BEFORE_START");
-
-        /* 检查 MAX30003 是否在外部输入模式 */
-        if (!MAX30003_CheckExternalInputConfig()) {
-            g_ecg_rec.state = ECG_REC_ERROR;
-            SD_DebugLog_WriteLine("ERROR_NOT_EXTERNAL_INPUT_MODE");
-            MAX30003_SaveRegisterSnapshotToDebugLog("ERROR_NOT_EXTERNAL");
-            continue;
-        }
-
-        g_ecg_rec.sd_file_opened = 0;
-        g_ecg_rec.sd_file_closed = 0;
         g_ecg_rec.state = ECG_REC_RECORDING;
 
         /* 等待 SDWriter 打开文件，最多 3000ms */
@@ -270,22 +251,23 @@ void StartTask_Sensor(void *argument)
 
         if (!g_ecg_rec.sd_file_opened) {
             g_ecg_rec.state = ECG_REC_ERROR;
-            g_ecg_rec.sd_file_closed = 1;
             SD_DebugLog_WriteLine("ERROR_SD_OPEN_TIMEOUT");
             continue;
         }
 
+        SD_DebugLog_WriteLine("CAL_TEST_START");
+
         ecg_buf_idx = 0;
         g_sys_state = SYS_STATE_RECORDING;
+
+        /* 每次开始新记录前重置 MAX30003 相关统计 */
+        ECG_ResetStats();
 
         while (ulTaskNotifyTake(pdTRUE, 0) > 0) {}
         __HAL_GPIO_EXTI_CLEAR_IT(ECG_INT_Pin);
 
         ecg_streaming = 1;
         MAX30003_StartStream();
-
-        SD_DebugLog_WriteLine("RECORDING_STARTED_EXTERNAL");
-        SD_DebugLog_WriteSnapshot();
       }
     }
 
@@ -298,7 +280,7 @@ void StartTask_Sensor(void *argument)
         ECG_SDLogger_RequestStop();
         g_ecg_rec.state = ECG_REC_STOPPING;
 
-        SD_DebugLog_WriteLine("EXTERNAL_STOP_REQUEST");
+        SD_DebugLog_WriteLine("CAL_TEST_STOP_REQUEST");
       }
     }
 

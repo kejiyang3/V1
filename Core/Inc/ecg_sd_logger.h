@@ -10,7 +10,6 @@ extern "C" {
 
 typedef struct {
     uint32_t timestamp_ms;
-    uint32_t sample_time_ms;
     uint32_t seq;
     int16_t ecg;
 } ECG_SD_Record_t;
@@ -21,9 +20,6 @@ void ECG_SDLogger_InitQueue(void);
 void StartTask_ECG_SDWriter(void *argument);
 void ECG_SDLogger_Enqueue(int16_t ecg);
 void ECG_SDLogger_RequestStop(void);
-void ECG_SDLogger_ClearQueue(void);
-uint32_t ECG_SDLogger_GetQueueCount(void);
-uint32_t ECG_SDLogger_GetQueueCapacity(void);
 
 #ifdef __cplusplus
 }
