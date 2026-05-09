@@ -21,6 +21,8 @@
 #include "ecg_record_control.h"
 #include "ecg_sd_logger.h"
 #include "ecg_usb_dump.h"
+#include "app_log.h"
+#include "sd_debug_log.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -175,8 +177,7 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN RTOS_THREADS */
   Task_ECG_SDWriterHandle = osThreadNew(StartTask_ECG_SDWriter, NULL, &Task_ECG_SDWriter_attributes);
   if (Task_ECG_SDWriterHandle == NULL) g_task_create_error |= (1UL << 2);
-  Task_ECG_USBDumpHandle = osThreadNew(StartTask_ECG_USBDump, NULL, &Task_ECG_USBDump_attributes);
-  if (Task_ECG_USBDumpHandle == NULL) g_task_create_error |= (1UL << 3);
+  /* USB Dump Task — V1 不创建，关闭 USB 文件发送 */
   /* USER CODE END RTOS_THREADS */
 }
 
@@ -195,9 +196,8 @@ void StartTask_LVGL(void *argument)
   HAL_UARTEx_ReceiveToIdle_DMA(&huart1, ble_rx_buf, BLE_RX_BUF_SIZE);
   __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
 
-  /* 3. USB CDC 就绪 */
-  Safe_USB_Printf("\r\n[SYS] RTOS Started, USB CDC Ready!\r\n");
-  Safe_USB_Printf("[TASK_CHECK] create_error_mask=0x%08lX\r\n", g_task_create_error);
+  /* 3. USB CDC 就绪（V1 关闭 USB 日志） */
+  APP_USB_LOG("\r\n[SYS] RTOS Started, USB CDC Ready!\r\n");
 
   /* 4. 初始化 LVGL 显示 + V1 ECG 控制界面 */
   APP_LVGL_Init();
@@ -220,17 +220,18 @@ void StartTask_Sensor(void *argument)
 
   osDelay(3000);
 
-  Safe_USB_Printf("[ECG_V1] Sensor task started\r\n");
+  /* SD debug log — 必须在 RTOS 运行后才能安全调用 f_mount */
+  SD_DebugLog_Init();
+
+  APP_USB_LOG("[ECG_V1] Sensor task started\r\n");
 
   MAX30003_Init();
 
-  Safe_USB_Printf("[ECG_V1] MAX30003 init done\r\n");
+  SD_DebugLog_WriteLine("MAX30003_INIT_DONE");
 
   /* 初始不采集 */
   ecg_streaming = 0;
   g_sys_state = SYS_STATE_IDLE;
-
-  uint32_t last_info = HAL_GetTick();
 
   for (;;) {
     if (g_ecg_rec.request_start) {
@@ -241,7 +242,6 @@ void StartTask_Sensor(void *argument)
           g_ecg_rec.state == ECG_REC_ERROR) {
 
         g_ecg_rec.state = ECG_REC_RECORDING;
-        Safe_USB_Printf("[ECG_V1] start requested, waiting for SD open\r\n");
 
         /* 等待 SDWriter 打开文件，最多 3000ms */
         uint32_t t0 = HAL_GetTick();
@@ -251,21 +251,23 @@ void StartTask_Sensor(void *argument)
 
         if (!g_ecg_rec.sd_file_opened) {
             g_ecg_rec.state = ECG_REC_ERROR;
-            Safe_USB_Printf("[ECG_V1][ERR] SD file not opened within timeout\r\n");
+            SD_DebugLog_WriteLine("ERROR_SD_OPEN_TIMEOUT");
             continue;
         }
+
+        SD_DebugLog_WriteLine("CAL_TEST_START");
 
         ecg_buf_idx = 0;
         g_sys_state = SYS_STATE_RECORDING;
 
-        /* 清空旧通知 */
+        /* 每次开始新记录前重置 MAX30003 相关统计 */
+        ECG_ResetStats();
+
         while (ulTaskNotifyTake(pdTRUE, 0) > 0) {}
         __HAL_GPIO_EXTI_CLEAR_IT(ECG_INT_Pin);
 
         ecg_streaming = 1;
         MAX30003_StartStream();
-
-        Safe_USB_Printf("[ECG_V1] recording started\r\n");
       }
     }
 
@@ -278,32 +280,20 @@ void StartTask_Sensor(void *argument)
         ECG_SDLogger_RequestStop();
         g_ecg_rec.state = ECG_REC_STOPPING;
 
-        Safe_USB_Printf("[ECG_V1] stop requested\r\n");
+        SD_DebugLog_WriteLine("CAL_TEST_STOP_REQUEST");
       }
     }
 
     if (ecg_streaming && g_ecg_rec.state == ECG_REC_RECORDING) {
-      /* 中断通知 + fallback 轮询 */
       (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5));
       MAX30003_Task();
     } else {
       osDelay(20);
     }
 
-    if (g_ecg_rec.request_usb_info) {
-      g_ecg_rec.request_usb_info = 0;
-      APP_Print_ECG_Storage_Info();
-    }
-
-    /* 每 2 秒打印一次心跳 */
-    if (g_ecg_rec.state == ECG_REC_RECORDING &&
-        (HAL_GetTick() - last_info) >= 2000) {
-      last_info = HAL_GetTick();
-      Safe_USB_Printf("[ECG_V1] alive samples=%lu written=%lu drop=%lu bytes=%lu\r\n",
-                      g_ecg_rec.ecg_sample_count,
-                      g_ecg_rec.ecg_written_count,
-                      g_ecg_rec.ecg_drop_count,
-                      g_ecg_rec.sd_write_bytes);
+    if (g_ecg_rec.request_save_info) {
+      g_ecg_rec.request_save_info = 0;
+      SD_DebugLog_WriteSnapshot();
     }
   }
   /* USER CODE END StartTask_Sensor */
@@ -356,11 +346,6 @@ void StartTask_BLE(void *argument)
   /* USER CODE BEGIN StartTask_BLE */
   (void)argument;
 
-  /* USB 健康检查 — 快照变量 */
-  static uint32_t last_usb_check = 0;
-  static uint32_t last_busy_snapshot = 0;
-  extern USBD_HandleTypeDef hUsbDeviceFS;
-
   for(;;) {
     if (ble_rx_flag) {
       if (ble_rx_len < BLE_RX_BUF_SIZE) {
@@ -370,31 +355,6 @@ void StartTask_BLE(void *argument)
       }
       ble_rx_flag = 0;
       ble_rx_len = 0;
-    }
-
-    /* ========== USB 健康检查：每 5 秒执行一次 ========== */
-    if ((HAL_GetTick() - last_usb_check) >= 5000) {
-        last_usb_check = HAL_GetTick();
-
-        if (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) {
-            uint32_t busy_diff = usb_tx_busy_count - last_busy_snapshot;
-            last_busy_snapshot = usb_tx_busy_count;
-
-            if (busy_diff > 10) {
-                /* USB TX 连续超限 → 状态机卡死，执行恢复 */
-                taskENTER_CRITICAL();
-                USBD_Stop(&hUsbDeviceFS);
-                USBD_Start(&hUsbDeviceFS);
-                taskEXIT_CRITICAL();
-
-                usb_tx_busy_count = 0;
-                usb_tx_drop_count = 0;
-                Safe_USB_Printf("[USB] CDC 状态机重置完成\r\n");
-            }
-        } else {
-            /* USB 未连接，仅更新快照 */
-            last_busy_snapshot = usb_tx_busy_count;
-        }
     }
 
     osDelay(10);

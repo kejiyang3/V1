@@ -2,11 +2,10 @@
 #include "spi.h"
 #include "usart.h"
 #include "usb_printf.h"
+#include "app_log.h"
+#include "ecg_record_control.h"
 #include <stdio.h>
 #include <string.h>
-
-/* 外部引用 — RTOS-safe USB 打印 (定义在 freertos.c) */
-extern void Safe_USB_Printf(const char *format, ...);
 
 /* 外部引用 — Packagedata_AddEcgSample 弱实现 (可被外部覆盖) */
 __attribute__((weak)) void Packagedata_AddEcgSample(int16_t ecg)
@@ -38,24 +37,24 @@ static int MAX30003_WriteVerify(uint8_t reg, uint32_t expected, const char *name
 {
     uint32_t readback = 0;
     if (MAX30003_WriteReg(reg, expected) != HAL_OK) {
-        Safe_USB_Printf("[MAX30003][ERR] WRITE %s failed\r\n", name);
+        APP_USB_LOG("[MAX30003][ERR] WRITE %s failed\r\n", name);
         return 0;
     }
 
     HAL_Delay(1);
 
     if (MAX30003_ReadReg(reg, &readback) != HAL_OK) {
-        Safe_USB_Printf("[MAX30003][ERR] READBACK %s failed\r\n", name);
+        APP_USB_LOG("[MAX30003][ERR] READBACK %s failed\r\n", name);
         return 0;
     }
 
     if (readback != expected) {
-        Safe_USB_Printf("[MAX30003][ERR] %s mismatch: wrote=0x%06lX read=0x%06lX\r\n",
+        APP_USB_LOG("[MAX30003][ERR] %s mismatch: wrote=0x%06lX read=0x%06lX\r\n",
                    name, expected, readback);
         return 0;
     }
 
-    Safe_USB_Printf("[MAX30003][OK] %s = 0x%06lX\r\n", name, readback);
+    APP_USB_LOG("[MAX30003][OK] %s = 0x%06lX\r\n", name, readback);
     return 1;
 }
 
@@ -75,7 +74,7 @@ HAL_StatusTypeDef MAX30003_WriteReg(uint8_t reg, uint32_t data)
     ECG_CSB_HIGH();
 
     if(st != HAL_OK) {
-        Safe_USB_Printf("[SPI_ERR] WriteReg failed! HAL_Status: %d, SPI_State: %d, ErrorCode: %lu\r\n",
+        APP_USB_LOG("[SPI_ERR] WriteReg failed! HAL_Status: %d, SPI_State: %d, ErrorCode: %lu\r\n",
                    st, HAL_SPI_GetState(&hspi3), HAL_SPI_GetError(&hspi3));
     }
     return st;
@@ -98,7 +97,7 @@ HAL_StatusTypeDef MAX30003_ReadReg(uint8_t reg, uint32_t *data)
     if (st == HAL_OK && data != NULL) {
         *data = ((uint32_t)rx[1] << 16) | ((uint32_t)rx[2] << 8) | (uint32_t)rx[3];
     } else {
-        Safe_USB_Printf("[SPI_ERR] ReadReg failed! HAL_Status: %d, SPI_State: %d, ErrorCode: %lu\r\n",
+        APP_USB_LOG("[SPI_ERR] ReadReg failed! HAL_Status: %d, SPI_State: %d, ErrorCode: %lu\r\n",
                    st, HAL_SPI_GetState(&hspi3), HAL_SPI_GetError(&hspi3));
     }
     return st;
@@ -137,7 +136,7 @@ void MAX30003_Init(void)
     uint32_t dummy = 0;
     uint32_t info1 = 0, info2 = 0, info3 = 0;
 
-    Safe_USB_Printf("[MAX30003] Initializing...\r\n");
+    APP_USB_LOG("[MAX30003] Initializing...\r\n");
 
     MAX30003_CS_Init();
 
@@ -155,12 +154,21 @@ void MAX30003_Init(void)
     HAL_Delay(1);
     if (MAX30003_ReadReg(MAX30003_INFO, &info3) != HAL_OK) return;
 
-    Safe_USB_Printf("[MAX30003] INFO=0x%06lX\r\n", info1);
+    APP_USB_LOG("[MAX30003] INFO=0x%06lX\r\n", info1);
 
     if (!MAX30003_WriteVerify(MAX30003_CNFG_GEN,
                               MAX30003_CNFG_GEN_NORMAL,
                               "CNFG_GEN")) return;
 
+#if MAX30003_USE_INTERNAL_CAL_TEST
+    if (!MAX30003_WriteVerify(MAX30003_CNFG_CAL,
+                              MAX30003_CNFG_CAL_1HZ_BIPOLAR,
+                              "CNFG_CAL")) return;
+
+    if (!MAX30003_WriteVerify(MAX30003_CNFG_EMUX,
+                              MAX30003_CNFG_EMUX_CAL_DIFF,
+                              "CNFG_EMUX")) return;
+#else
     if (!MAX30003_WriteVerify(MAX30003_CNFG_CAL,
                               0x000000,
                               "CNFG_CAL")) return;
@@ -168,6 +176,7 @@ void MAX30003_Init(void)
     if (!MAX30003_WriteVerify(MAX30003_CNFG_EMUX,
                               0x000000,
                               "CNFG_EMUX")) return;
+#endif
 
     if (!MAX30003_WriteVerify(MAX30003_CNFG_ECG,
                               MAX30003_CNFG_ECG_NORMAL,
@@ -195,39 +204,60 @@ void MAX30003_Init(void)
     MAX30003_Synch();
 
     MAX30003_ReadReg(MAX30003_STATUS, &dummy);
-    Safe_USB_Printf("[MAX30003] Init done. STATUS=0x%06lX\r\n", dummy);
+    APP_USB_LOG("[MAX30003] Init done. STATUS=0x%06lX\r\n", dummy);
 }
 
 /**
-  * @brief  启动 ECG 采集流
+  * @brief  启动 ECG 采集流 — 开始前重置 FIFO/SYNCH/STATUS
   */
 void MAX30003_StartStream(void)
 {
-    uint32_t status = 0;
+    uint32_t status1 = 0;
+    uint32_t status2 = 0;
+    uint32_t status3 = 0;
 
-    (void)MAX30003_ReadReg(MAX30003_STATUS, &status);
+    /* 先关闭正常 ECG 中断，避免清 FIFO/SYNCH 期间触发任务通知 */
+    (void)MAX30003_WriteReg(MAX30003_EN_INT, MAX30003_EN_INT_IDLE);
 
+    /* 关键: 真正开始记录前重新 FIFO_RST + SYNCH，清除 Init→Start 之间的旧数据 */
+    MAX30003_FifoReset();
+    MAX30003_Synch();
+
+    /* 连续读两次 STATUS 清掉旧的 sticky flags */
+    (void)MAX30003_ReadReg(MAX30003_STATUS, &status1);
+    (void)MAX30003_ReadReg(MAX30003_STATUS, &status2);
+
+    /* 打开正常 ECG 中断 */
     if (MAX30003_WriteReg(MAX30003_EN_INT, MAX30003_EN_INT_NORMAL) != HAL_OK) {
-        Safe_USB_Printf("[MAX30003][ERR] StartStream write EN_INT failed\r\n");
+        APP_USB_LOG("[MAX30003][ERR] StartStream write EN_INT_NORMAL failed\r\n");
         return;
     }
 
-    MAX30003_ReadReg(MAX30003_STATUS, &status);
-    Safe_USB_Printf("[MAX30003] Stream started. STATUS=0x%06lX\r\n", status);
+    (void)MAX30003_ReadReg(MAX30003_STATUS, &status3);
+
+    g_ecg_rec.last_status = status3;
+
+    APP_USB_LOG("[MAX30003] StartStream status1=0x%06lX status2=0x%06lX status3=0x%06lX\r\n",
+                status1, status2, status3);
 }
 
 /**
-  * @brief  停止 ECG 采集流
+  * @brief  停止 ECG 采集流 — 关闭中断并清 FIFO
   */
 void MAX30003_StopStream(void)
 {
-    uint32_t dummy = 0;
+    uint32_t status = 0;
 
-    MAX30003_WriteReg(MAX30003_EN_INT, MAX30003_EN_INT_IDLE);
+    (void)MAX30003_WriteReg(MAX30003_EN_INT, MAX30003_EN_INT_IDLE);
+
+    /* 清 FIFO + SYNCH，避免下一次 Start 带入旧样本 */
     MAX30003_FifoReset();
-    MAX30003_ReadReg(MAX30003_STATUS, &dummy);
+    MAX30003_Synch();
 
-    Safe_USB_Printf("[MAX30003] Stream stopped\r\n");
+    (void)MAX30003_ReadReg(MAX30003_STATUS, &status);
+    g_ecg_rec.last_status = status;
+
+    APP_USB_LOG("[MAX30003] StopStream done. STATUS=0x%06lX\r\n", status);
 }
 
 /**
@@ -286,88 +316,96 @@ static HAL_StatusTypeDef MAX30003_ReadFifoBurst(uint32_t *samples, uint8_t max_s
 }
 
 /**
-  * @brief  提取并处理 MAX30003 FIFO 数据
+  * @brief  更新 STATUS 相关统计 (PLL seen / edge / last_status)
+  */
+static void MAX30003_UpdateStatusStats(uint32_t status_reg)
+{
+    g_ecg_rec.last_status = status_reg;
+
+    if (status_reg & MAX30003_STATUS_PLLINT) {
+        g_ecg_rec.pll_status_seen_count++;
+        g_ecg_rec.pll_warn_count = g_ecg_rec.pll_status_seen_count;
+
+        /* 边沿检测: 只有从 0→1 才加 edge count */
+        if (!g_ecg_rec.pll_current_set) {
+            g_ecg_rec.pll_edge_count++;
+            g_ecg_rec.pll_current_set = 1;
+        }
+    } else {
+        g_ecg_rec.pll_current_set = 0;
+    }
+}
+
+/**
+  * @brief  提取并处理 MAX30003 FIFO 数据 (drain loop, 最多 4 轮)
   * @note   Burst 读 FIFO，一次 32 word；避免在采样路径里调用阻塞/打印函数。
   */
 void MAX30003_Task(void)
 {
-    uint32_t status_reg = 0;
-    static uint32_t ovf_count = 0;
-    static uint32_t pll_warn_count = 0;
-    static uint32_t sample_count = 0;
+    uint8_t drain;
 
-    if (MAX30003_ReadReg(MAX30003_STATUS, &status_reg) != HAL_OK) {
-        return;
-    }
+    for (drain = 0; drain < 4; drain++) {
+        uint32_t status_reg = 0;
 
-    /* 处理 FIFO overflow */
-    if (status_reg & MAX30003_STATUS_EOVF) {
-        ovf_count++;
-        Safe_USB_Printf("[MAX30003][WARN] EOVF ovf=%lu\r\n", ovf_count);
-        MAX30003_FifoReset();
-        MAX30003_Synch();
-        uint32_t dummy = 0;
-        MAX30003_ReadReg(MAX30003_STATUS, &dummy);
-        return;
-    }
-
-    /* PLLINT 仅限频报警 */
-    if (status_reg & MAX30003_STATUS_PLLINT) {
-        pll_warn_count++;
-        if (pll_warn_count <= 3 || (pll_warn_count % 200) == 0) {
-            Safe_USB_Printf("[MAX30003][WARN] PLLINT observed. STATUS=0x%06lX pll=%lu\r\n",
-                       status_reg, pll_warn_count);
+        if (MAX30003_ReadReg(MAX30003_STATUS, &status_reg) != HAL_OK) {
+            return;
         }
-    }
 
-    if ((status_reg & MAX30003_STATUS_EINT) == 0) {
-        return;
-    }
+        MAX30003_UpdateStatusStats(status_reg);
 
-    uint32_t samples[FIFO_BURST_SIZE];
-
-    if (MAX30003_ReadFifoBurst(samples, FIFO_BURST_SIZE) != HAL_OK) {
-        Safe_USB_Printf("[MAX30003][ERR] FIFO burst read failed\r\n");
-        return;
-    }
-
-    for (uint8_t i = 0; i < FIFO_BURST_SIZE; i++) {
-        uint32_t raw_data = samples[i];
-        uint8_t etag = (raw_data >> 3) & 0x07;
-
-        if (etag == 0x00 || etag == 0x02) {
-            int16_t ecg_val = MAX30003_ConvertData(raw_data);
-            Packagedata_AddEcgSample(ecg_val);
-            sample_count++;
-
-            if (etag == 0x02) {
-                break;
-            }
-        }
-        else if (etag == 0x01 || etag == 0x03) {
-            if (etag == 0x03) {
-                break;
-            }
-        }
-        else if (etag == 0x06) {
-            break;
-        }
-        else if (etag == 0x07) {
-            ovf_count++;
-            Safe_USB_Printf("[MAX30003][WARN] ETAG ovf ovf=%lu\r\n", ovf_count);
+        /* 处理 FIFO overflow */
+        if (status_reg & MAX30003_STATUS_EOVF) {
+            g_ecg_rec.fifo_eovf_count++;
             MAX30003_FifoReset();
             MAX30003_Synch();
-            break;
-        }
-        else {
-            break;
-        }
-    }
 
-    /* 每 1024 个样本打印一次心跳 */
-    if ((sample_count % 1024) == 0 && sample_count != 0) {
-        Safe_USB_Printf("[MAX30003] samples=%lu ovf=%lu pll=%lu\r\n",
-                   sample_count, ovf_count, pll_warn_count);
+            uint32_t dummy = 0;
+            MAX30003_ReadReg(MAX30003_STATUS, &dummy);
+            g_ecg_rec.last_status = dummy;
+            return;
+        }
+
+        /* 无 EINT 则退出 drain */
+        if ((status_reg & MAX30003_STATUS_EINT) == 0) {
+            return;
+        }
+
+        uint32_t samples[FIFO_BURST_SIZE];
+
+        if (MAX30003_ReadFifoBurst(samples, FIFO_BURST_SIZE) != HAL_OK) {
+            return;
+        }
+
+        for (uint8_t i = 0; i < FIFO_BURST_SIZE; i++) {
+            uint32_t raw_data = samples[i];
+            uint8_t etag = (raw_data >> 3) & 0x07;
+
+            if (etag == 0x00 || etag == 0x02) {
+                int16_t ecg_val = MAX30003_ConvertData(raw_data);
+
+                g_ecg_rec.fifo_sample_count++;
+                Packagedata_AddEcgSample(ecg_val);
+
+                if (etag == 0x02) break;
+            }
+            else if (etag == 0x01 || etag == 0x03) {
+                if (etag == 0x03) break;
+            }
+            else if (etag == 0x06) {
+                g_ecg_rec.fifo_empty_count++;
+                break;
+            }
+            else if (etag == 0x07) {
+                g_ecg_rec.fifo_etag_overflow_count++;
+                g_ecg_rec.fifo_eovf_count++;
+                MAX30003_FifoReset();
+                MAX30003_Synch();
+                return;
+            }
+            else {
+                break;
+            }
+        }
     }
 }
 
@@ -384,9 +422,9 @@ void MAX30003_Diagnostic_Dump(void)
 {
     uint32_t reg[5];
 
-    Safe_USB_Printf("\r\n======================================================\r\n");
-    Safe_USB_Printf("         MAX30003 COMPREHENSIVE DIAGNOSTIC            \r\n");
-    Safe_USB_Printf("======================================================\r\n");
+    APP_USB_LOG("\r\n======================================================\r\n");
+    APP_USB_LOG("         MAX30003 COMPREHENSIVE DIAGNOSTIC            \r\n");
+    APP_USB_LOG("======================================================\r\n");
 
     /* Read core configuration registers */
     MAX30003_ReadReg(MAX30003_INFO, &reg[0]);
@@ -395,15 +433,15 @@ void MAX30003_Diagnostic_Dump(void)
     MAX30003_ReadReg(MAX30003_CNFG_ECG, &reg[3]);
     MAX30003_ReadReg(MAX30003_CNFG_CAL, &reg[4]);
 
-    Safe_USB_Printf("[0x0F] INFO       : 0x%06X\r\n", (unsigned int)reg[0]);
-    Safe_USB_Printf("[0x10] CNFG_GEN   : 0x%06X\r\n", (unsigned int)reg[1]);
-    Safe_USB_Printf("[0x14] CNFG_EMUX  : 0x%06X (OPENP=%lu, OPENN=%lu)\r\n",
+    APP_USB_LOG("[0x0F] INFO       : 0x%06X\r\n", (unsigned int)reg[0]);
+    APP_USB_LOG("[0x10] CNFG_GEN   : 0x%06X\r\n", (unsigned int)reg[1]);
+    APP_USB_LOG("[0x14] CNFG_EMUX  : 0x%06X (OPENP=%lu, OPENN=%lu)\r\n",
                (unsigned int)reg[2], (reg[2]>>21)&1, (reg[2]>>20)&1);
-    Safe_USB_Printf("[0x15] CNFG_ECG   : 0x%06X\r\n", (unsigned int)reg[3]);
-    Safe_USB_Printf("[0x12] CNFG_CAL   : 0x%06X\r\n", (unsigned int)reg[4]);
+    APP_USB_LOG("[0x15] CNFG_ECG   : 0x%06X\r\n", (unsigned int)reg[3]);
+    APP_USB_LOG("[0x12] CNFG_CAL   : 0x%06X\r\n", (unsigned int)reg[4]);
 
-    Safe_USB_Printf("\r\n--- Executing Active DC Lead-Off Test ---\r\n");
-    Safe_USB_Printf("Checking physical PCB trace continuity...\r\n");
+    APP_USB_LOG("\r\n--- Executing Active DC Lead-Off Test ---\r\n");
+    APP_USB_LOG("Checking physical PCB trace continuity...\r\n");
 
     /*
      * Enable DC Lead-Off for testing:
@@ -416,21 +454,21 @@ void MAX30003_Diagnostic_Dump(void)
 
     uint32_t status_reg;
     MAX30003_ReadReg(MAX30003_STATUS, &status_reg);
-    Safe_USB_Printf("[0x01] STATUS     : 0x%06X\r\n", (unsigned int)status_reg);
+    APP_USB_LOG("[0x01] STATUS     : 0x%06X\r\n", (unsigned int)status_reg);
 
     uint8_t loff = status_reg & 0x0F;
-    Safe_USB_Printf("\r\n[HARDWARE DIAGNOSIS RESULT]:\r\n");
+    APP_USB_LOG("\r\n[HARDWARE DIAGNOSIS RESULT]:\r\n");
     if (loff == 0) {
-        Safe_USB_Printf(" -> CLOSED: Both electrodes are physically connected.\r\n");
+        APP_USB_LOG(" -> CLOSED: Both electrodes are physically connected.\r\n");
     } else {
-        if (loff & 0x08) Safe_USB_Printf(" -> [FAIL] ECGP (Positive / Pin 6) is physically OPEN or floating!\r\n");
-        if (loff & 0x04) Safe_USB_Printf(" -> [FAIL] ECGP (Positive / Pin 6) is SHORTED to GND!\r\n");
-        if (loff & 0x02) Safe_USB_Printf(" -> [FAIL] ECGN (Negative / Pin 7) is physically OPEN or floating!\r\n");
-        if (loff & 0x01) Safe_USB_Printf(" -> [FAIL] ECGN (Negative / Pin 7) is SHORTED to GND!\r\n");
+        if (loff & 0x08) APP_USB_LOG(" -> [FAIL] ECGP (Positive / Pin 6) is physically OPEN or floating!\r\n");
+        if (loff & 0x04) APP_USB_LOG(" -> [FAIL] ECGP (Positive / Pin 6) is SHORTED to GND!\r\n");
+        if (loff & 0x02) APP_USB_LOG(" -> [FAIL] ECGN (Negative / Pin 7) is physically OPEN or floating!\r\n");
+        if (loff & 0x01) APP_USB_LOG(" -> [FAIL] ECGN (Negative / Pin 7) is SHORTED to GND!\r\n");
     }
 
     /* Restore normal clean AFE configuration */
     MAX30003_WriteReg(MAX30003_CNFG_GEN, MAX30003_CNFG_GEN_NORMAL);
 
-    Safe_USB_Printf("======================================================\r\n");
+    APP_USB_LOG("======================================================\r\n");
 }

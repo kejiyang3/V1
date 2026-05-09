@@ -55,6 +55,18 @@ extern "C" {
 #define MAX30003_STATUS_EOVF    0x400000UL
 #define MAX30003_STATUS_PLLINT  0x000100UL
 
+/* ========== 内部校准测试模式 ========== */
+/* 设置为 1 启用内部 1Hz 校准波，0 为正常外部 ECG 输入 */
+#define MAX30003_USE_INTERNAL_CAL_TEST    1
+
+/* ========== CNFG_CAL 校准配置 ========== */
+/* FCAL=00 (1Hz), SCAL=010 (0.5mV), CDONE=0, DF=0, FCD=00 */
+#define MAX30003_CNFG_CAL_1HZ_BIPOLAR      0x704800UL
+
+/* ========== CNFG_EMUX 电极复用 ========== */
+/* CALP_SEL=11 (VCALP), CALN_SEL=01 (VCALN), CAL_MODE=11 */
+#define MAX30003_CNFG_EMUX_CAL_DIFF        0x3B0000UL
+
 /* ========== CNFG_GEN 位域 ========== */
 /* EN_ECG=1, FMSTR=00, EN_RBIAS=01, RBIASV=01 (100M), RBIASP=1, RBIASN=1 */
 #define CNFG_GEN_EN_ECG         (1UL << 19)

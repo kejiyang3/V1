@@ -14,6 +14,9 @@
 /* External variable for wake-up touch locking */
 volatile uint8_t block_touch_flag = 0;
 
+/* 触摸手势 — 供 app_lvgl.c 读取做页面切换 */
+volatile uint8_t g_touch_gesture = 0;
+
 /*-------------------------------------------
  *  Static functions
  *------------------------------------------*/
@@ -62,6 +65,10 @@ static void touchpad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
         data->state = LV_INDEV_STATE_REL;
 
         if (prev_pressed) {
+            /* 记录滑动手势（左右滑动换页） */
+            if (gesture == 0x03 || gesture == 0x04) {
+                g_touch_gesture = gesture;
+            }
             usb_printf("[Touch] UP last_x:%u last_y:%u\r\n", last_x, last_y);
         }
     }

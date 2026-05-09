@@ -29,11 +29,24 @@ typedef struct {
     volatile uint32_t ecg_drop_count;
     volatile uint32_t sd_write_bytes;
     volatile uint32_t sd_sync_count;
+    volatile uint32_t fifo_eovf_count;
+    volatile uint32_t pll_warn_count;
 
-    volatile uint8_t sd_file_opened;   /* SDWriter 已打开文件 */
-    volatile uint8_t sd_file_closed;   /* SDWriter 已关闭文件 */
+    /* 新增: STATUS / PLL / FIFO 详细诊断 */
+    volatile uint32_t last_status;
+    volatile uint32_t pll_status_seen_count;
+    volatile uint32_t pll_edge_count;
+    volatile uint8_t  pll_current_set;
+    volatile uint32_t fifo_sample_count;
+    volatile uint32_t fifo_empty_count;
+    volatile uint32_t fifo_etag_overflow_count;
 
-    volatile uint32_t file_seq;        /* 文件序号，用户通过 +/- 调节 */
+    volatile uint8_t sd_file_opened;
+    volatile uint8_t sd_file_closed;
+
+    volatile uint8_t request_save_info;
+
+    volatile uint32_t file_seq;
     char file_name[32];
 } ECG_RecordControl_t;
 
@@ -42,7 +55,9 @@ extern ECG_RecordControl_t g_ecg_rec;
 void ECG_RequestStart(void);
 void ECG_RequestStop(void);
 void ECG_RequestUsbInfo(void);
+void ECG_RequestSaveInfo(void);
 void ECG_UpdateFileName(void);
+void ECG_ResetStats(void);
 
 #ifdef __cplusplus
 }
