@@ -21,14 +21,14 @@ ECG_RecordControl_t g_ecg_rec = {
     .fifo_sample_count = 0,
     .fifo_empty_count = 0,
     .fifo_etag_overflow_count = 0,
-    .file_name = "0:/ecg_cal_001.csv"
+    .file_name = "0:/ecg_001.csv"
 };
 
 /* 根据当前 file_seq 更新 file_name */
 void ECG_UpdateFileName(void)
 {
     snprintf(g_ecg_rec.file_name, sizeof(g_ecg_rec.file_name),
-             "0:/ecg_cal_%03lu.csv", g_ecg_rec.file_seq);
+             "0:/ecg_%03lu.csv", g_ecg_rec.file_seq);
 }
 
 void ECG_RequestStart(void)

@@ -147,7 +147,7 @@ static void ui_update_cb(lv_timer_t *timer)
         }
         lv_label_set_text_fmt(ui_label_rate, "Rate: %lu Hz", rate_hz);
 
-        lv_label_set_text_fmt(ui_label_file, "File: ecg_cal_%03lu.csv  ", g_ecg_rec.file_seq);
+        lv_label_set_text_fmt(ui_label_file, "File: ecg_%03lu.csv  ", g_ecg_rec.file_seq);
         lv_label_set_text_fmt(ui_label_samples, "Samples: %lu", g_ecg_rec.ecg_sample_count);
         lv_label_set_text_fmt(ui_label_drop, "Drop: %lu", g_ecg_rec.ecg_drop_count);
 
@@ -205,7 +205,7 @@ void App_LVGL_TestUI(void)
 
     /* Title */
     ui_label_title = lv_label_create(lv_scr_act());
-    lv_label_set_text(ui_label_title, "ECG CAL 1Hz TEST");
+    lv_label_set_text(ui_label_title, "ECG DATA");
     lv_obj_set_style_text_color(ui_label_title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(ui_label_title, &lv_font_montserrat_14, 0);
     lv_obj_align(ui_label_title, LV_ALIGN_TOP_MID, 0, 10);
@@ -224,7 +224,7 @@ void App_LVGL_TestUI(void)
 
     /* File */
     ui_label_file = lv_label_create(lv_scr_act());
-    lv_label_set_text(ui_label_file, "File: ecg_cal_001.csv");
+    lv_label_set_text(ui_label_file, "File: ecg_001.csv");
     lv_obj_set_style_text_color(ui_label_file, lv_color_hex(0xFFFFFF), 0);
     lv_obj_align(ui_label_file, LV_ALIGN_TOP_LEFT, 10, 62);
 
@@ -293,7 +293,7 @@ void App_LVGL_TestUI(void)
 
     /* Title */
     ui_label_title2 = lv_label_create(lv_scr_act());
-    lv_label_set_text(ui_label_title2, "CAL Diag");
+    lv_label_set_text(ui_label_title2, "ECG Diag");
     lv_obj_set_style_text_color(ui_label_title2, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(ui_label_title2, &lv_font_montserrat_14, 0);
     lv_obj_align(ui_label_title2, LV_ALIGN_TOP_MID, 0, 10);

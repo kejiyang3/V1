@@ -57,7 +57,7 @@ extern "C" {
 
 /* ========== 内部校准测试模式 ========== */
 /* 设置为 1 启用内部 1Hz 校准波，0 为正常外部 ECG 输入 */
-#define MAX30003_USE_INTERNAL_CAL_TEST    1
+#define MAX30003_USE_INTERNAL_CAL_TEST    0
 
 /* ========== CNFG_CAL 校准配置 ========== */
 /* FCAL=00 (1Hz), SCAL=010 (0.5mV), CDONE=0, DF=0, FCD=00 */
