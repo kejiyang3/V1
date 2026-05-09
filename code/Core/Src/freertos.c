@@ -241,19 +241,9 @@ void StartTask_Sensor(void *argument)
           g_ecg_rec.state == ECG_REC_STOPPED ||
           g_ecg_rec.state == ECG_REC_ERROR) {
 
-        /* 开始前重置统计 生成文件名 */
-        ECG_ResetStats();
-        ECG_UpdateFileNameForNewRecording();
-
-        SD_DebugLog_WriteLine("START_REQUEST");
-        SD_DebugLog_WriteSnapshot();
-        MAX30003_SaveRegisterSnapshotToDebugLog("BEFORE_START");
-
-        g_ecg_rec.sd_file_opened = 0;
-        g_ecg_rec.sd_file_closed = 0;
         g_ecg_rec.state = ECG_REC_RECORDING;
 
-        /* 等待 SDWriter 打开文件 超时3000ms */
+        /* 等待 SDWriter 打开文件，最多 3000ms */
         uint32_t t0 = HAL_GetTick();
         while (!g_ecg_rec.sd_file_opened && (HAL_GetTick() - t0 < 3000)) {
             osDelay(10);
@@ -261,22 +251,23 @@ void StartTask_Sensor(void *argument)
 
         if (!g_ecg_rec.sd_file_opened) {
             g_ecg_rec.state = ECG_REC_ERROR;
-            g_ecg_rec.sd_file_closed = 1;
             SD_DebugLog_WriteLine("ERROR_SD_OPEN_TIMEOUT");
             continue;
         }
 
+        SD_DebugLog_WriteLine("CAL_TEST_START");
+
         ecg_buf_idx = 0;
         g_sys_state = SYS_STATE_RECORDING;
+
+        /* 每次开始新记录前重置 MAX30003 相关统计 */
+        ECG_ResetStats();
 
         while (ulTaskNotifyTake(pdTRUE, 0) > 0) {}
         __HAL_GPIO_EXTI_CLEAR_IT(ECG_INT_Pin);
 
         ecg_streaming = 1;
         MAX30003_StartStream();
-
-        SD_DebugLog_WriteLine("RECORDING_STARTED");
-        SD_DebugLog_WriteSnapshot();
       }
     }
 
@@ -289,7 +280,7 @@ void StartTask_Sensor(void *argument)
         ECG_SDLogger_RequestStop();
         g_ecg_rec.state = ECG_REC_STOPPING;
 
-        SD_DebugLog_WriteLine("STOP_REQUEST");
+        SD_DebugLog_WriteLine("CAL_TEST_STOP_REQUEST");
       }
     }
 

@@ -25,18 +25,10 @@ def analyze(csv_file):
     seq_diff = np.diff(seq)
     missing = np.where(seq_diff != 1)[0]
 
-    # 文件名检查
-    base = os.path.basename(csv_file).lower()
-    if "cal" in base:
-        print("WARNING: 文件名包含 cal(校准)，这是内部校准模式文件，不能代表真实外部输入。")
-    if not any(k in base for k in ["open", "short", "human"]):
-        print("WARNING: 文件名不包含 open/short/human，无法确定测试模式。")
-
     print("=" * 50)
     print("MAX30003 内部 1Hz 校准测试验证")
     print("=" * 50)
     print(f"文件: {csv_file}")
-    print(f"分析采样率: {FS} Hz")
     print(f"样本数: {len(df)}")
     print(f"seq 起始: {seq[0]}")
     print(f"seq 结束: {seq[-1]}")

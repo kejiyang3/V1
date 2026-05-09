@@ -22,7 +22,6 @@ static uint8_t s_page = 0;  /* 0=Main, 1=Diag */
 
 /* ----- Page 1: Main 对象 ----- */
 static lv_obj_t *ui_label_title;
-static lv_obj_t *ui_label_mode;
 static lv_obj_t *ui_label_state;
 static lv_obj_t *ui_label_rate;
 static lv_obj_t *ui_label_file;
@@ -72,13 +71,6 @@ static void btn_save_info_cb(lv_event_t *e)
     ECG_RequestSaveInfo();
 }
 
-/* ----- Mode toggle callback ----- */
-static void btn_mode_cb(lv_event_t *e)
-{
-    (void)e;
-    ECG_ToggleTestMode();
-}
-
 /* ----- File number +/- ----- */
 static void btn_file_dec_cb(lv_event_t *e)
 {
@@ -120,7 +112,7 @@ static void ui_update_cb(lv_timer_t *timer)
     /* ---- 页面可见性 ---- */
     /* Page 1 (Main) — 只隐藏顶层容器，子 label 自动跟随 */
     lv_obj_t *page1[] = {
-        ui_label_title, ui_label_mode, ui_label_state, ui_label_rate, ui_label_file,
+        ui_label_title, ui_label_state, ui_label_rate, ui_label_file,
         ui_label_samples, ui_label_drop,
         ui_btn_start, ui_btn_info
     };
@@ -155,8 +147,7 @@ static void ui_update_cb(lv_timer_t *timer)
         }
         lv_label_set_text_fmt(ui_label_rate, "Rate: %lu Hz", rate_hz);
 
-        lv_label_set_text_fmt(ui_label_file, "File: %s", g_ecg_rec.file_name + 3);
-        lv_label_set_text_fmt(ui_label_mode, "Mode: %s", ECG_GetTestModeName());
+        lv_label_set_text_fmt(ui_label_file, "File: ecg_cal_%03lu.csv  ", g_ecg_rec.file_seq);
         lv_label_set_text_fmt(ui_label_samples, "Samples: %lu", g_ecg_rec.ecg_sample_count);
         lv_label_set_text_fmt(ui_label_drop, "Drop: %lu", g_ecg_rec.ecg_drop_count);
 
@@ -214,7 +205,7 @@ void App_LVGL_TestUI(void)
 
     /* Title */
     ui_label_title = lv_label_create(lv_scr_act());
-    lv_label_set_text(ui_label_title, "ECG REAL TEST");
+    lv_label_set_text(ui_label_title, "ECG CAL 1Hz TEST");
     lv_obj_set_style_text_color(ui_label_title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(ui_label_title, &lv_font_montserrat_14, 0);
     lv_obj_align(ui_label_title, LV_ALIGN_TOP_MID, 0, 10);
@@ -225,41 +216,23 @@ void App_LVGL_TestUI(void)
     lv_obj_set_style_text_color(ui_label_state, lv_color_hex(0xAAAAAA), 0);
     lv_obj_align(ui_label_state, LV_ALIGN_TOP_MID, 0, 30);
 
-    /* Mode */
-    ui_label_mode = lv_label_create(lv_scr_act());
-    lv_label_set_text(ui_label_mode, "Mode: OPEN");
-    lv_obj_set_style_text_color(ui_label_mode, lv_color_hex(0xCCAA44), 0);
-    lv_obj_align(ui_label_mode, LV_ALIGN_TOP_LEFT, 10, 48);
-
-    /* Mode button */
-    lv_obj_t *ui_btn_mode = lv_btn_create(lv_scr_act());
-    lv_obj_set_size(ui_btn_mode, 36, 18);
-    lv_obj_align(ui_btn_mode, LV_ALIGN_TOP_LEFT, 100, 48);
-    lv_obj_set_style_bg_color(ui_btn_mode, lv_color_hex(0x555555), 0);
-    lv_obj_set_style_radius(ui_btn_mode, 6, 0);
-    lv_obj_t *ui_btn_mode_label = lv_label_create(ui_btn_mode);
-    lv_label_set_text(ui_btn_mode_label, "M");
-    lv_obj_center(ui_btn_mode_label);
-    lv_obj_set_style_text_color(ui_btn_mode_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_add_event_cb(ui_btn_mode, btn_mode_cb, LV_EVENT_CLICKED, NULL);
-
     /* Rate */
     ui_label_rate = lv_label_create(lv_scr_act());
     lv_label_set_text(ui_label_rate, "Rate: 0 Hz");
     lv_obj_set_style_text_color(ui_label_rate, lv_color_hex(0x88CC88), 0);
-    lv_obj_align(ui_label_rate, LV_ALIGN_TOP_LEFT, 10, 66);
+    lv_obj_align(ui_label_rate, LV_ALIGN_TOP_LEFT, 10, 48);
 
     /* File */
     ui_label_file = lv_label_create(lv_scr_act());
-    lv_label_set_text(ui_label_file, "File: ecg_open_001.csv");
+    lv_label_set_text(ui_label_file, "File: ecg_cal_001.csv");
     lv_obj_set_style_text_color(ui_label_file, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(ui_label_file, LV_ALIGN_TOP_LEFT, 10, 80);
+    lv_obj_align(ui_label_file, LV_ALIGN_TOP_LEFT, 10, 62);
 
     /* File +/- buttons */
     lv_obj_t *ui_btn;
     ui_btn = lv_btn_create(lv_scr_act());
     lv_obj_set_size(ui_btn, 36, 28);
-    lv_obj_align(ui_btn, LV_ALIGN_TOP_LEFT, 10, 96);
+    lv_obj_align(ui_btn, LV_ALIGN_TOP_LEFT, 10, 78);
     lv_obj_set_style_bg_color(ui_btn, lv_color_hex(0x555555), 0);
     lv_obj_set_style_radius(ui_btn, 8, 0);
     lv_obj_t *ld = lv_label_create(ui_btn);
@@ -270,7 +243,7 @@ void App_LVGL_TestUI(void)
 
     ui_btn = lv_btn_create(lv_scr_act());
     lv_obj_set_size(ui_btn, 36, 28);
-    lv_obj_align(ui_btn, LV_ALIGN_TOP_LEFT, 60, 96);
+    lv_obj_align(ui_btn, LV_ALIGN_TOP_LEFT, 60, 78);
     lv_obj_set_style_bg_color(ui_btn, lv_color_hex(0x555555), 0);
     lv_obj_set_style_radius(ui_btn, 8, 0);
     lv_obj_t *li = lv_label_create(ui_btn);
@@ -283,13 +256,13 @@ void App_LVGL_TestUI(void)
     ui_label_samples = lv_label_create(lv_scr_act());
     lv_label_set_text(ui_label_samples, "Samples: 0");
     lv_obj_set_style_text_color(ui_label_samples, lv_color_hex(0x88CC88), 0);
-    lv_obj_align(ui_label_samples, LV_ALIGN_TOP_LEFT, 10, 130);
+    lv_obj_align(ui_label_samples, LV_ALIGN_TOP_LEFT, 10, 112);
 
     /* Drop */
     ui_label_drop = lv_label_create(lv_scr_act());
     lv_label_set_text(ui_label_drop, "Drop: 0");
     lv_obj_set_style_text_color(ui_label_drop, lv_color_hex(0xCC8888), 0);
-    lv_obj_align(ui_label_drop, LV_ALIGN_TOP_LEFT, 10, 144);
+    lv_obj_align(ui_label_drop, LV_ALIGN_TOP_LEFT, 10, 126);
 
     /* Start/Stop */
     ui_btn_start = lv_btn_create(lv_scr_act());
@@ -320,7 +293,7 @@ void App_LVGL_TestUI(void)
 
     /* Title */
     ui_label_title2 = lv_label_create(lv_scr_act());
-    lv_label_set_text(ui_label_title2, "ECG Diag");
+    lv_label_set_text(ui_label_title2, "CAL Diag");
     lv_obj_set_style_text_color(ui_label_title2, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(ui_label_title2, &lv_font_montserrat_14, 0);
     lv_obj_align(ui_label_title2, LV_ALIGN_TOP_MID, 0, 10);

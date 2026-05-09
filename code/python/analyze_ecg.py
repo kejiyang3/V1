@@ -64,8 +64,9 @@ def read_csv(filepath):
                     fs_est = 1000.0 / dt
                     if 10 <= fs_est <= 10000:
                         fs = fs_est
-        # MAX30003 固定 512 SPS，禁止用 timestamp_ms 估算 (已知不稳定)
-        fs = 512.0
+        # 如果仍无法估算但已知是 MAX30003 512 SPS
+        if fs == 0:
+            fs = 512.0
 
     meta = {
         "file": os.path.basename(filepath),
@@ -267,11 +268,6 @@ def process_one(fpath, out_dir):
         return None
 
     fs = meta["fs"]
-    base = meta["file"].lower()
-    if "cal" in base:
-        print("  [警告] 文件名包含 cal，这是校准文件，不代表真实外部输入。")
-    if not any(k in base for k in ["open", "short", "human"]):
-        print("  [警告] 文件名不包含 open/short/human，无法确定测试模式。")
     print(f"  分析: {meta['file']}  ({meta['samples']} samples @ {fs} Hz)")
 
     stats = analyze(ecg, fs, seq)
