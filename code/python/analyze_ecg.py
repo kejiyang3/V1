@@ -35,38 +35,8 @@ def read_csv(filepath):
     has_ts = "timestamp_ms" in df.columns
     ts = df["timestamp_ms"].values.astype(np.float64) if has_ts else None
 
-    # 采样率：优先用 seq 推算
-    fs = 0
-    if n > 10:
-        if has_seq:
-            seq_diff = np.diff(seq)
-            pos = seq_diff[seq_diff > 0]
-            if len(pos) > 0:
-                median_step = np.median(pos)
-                # seq 间的时间差都是 1 (一个样本)，512Hz 下 1/512 ≈ 1.95ms
-                # 实际采样率由 MAX30003 固定 512Hz 决定，所以直接用 seq
-                if has_ts and ts is not None and len(ts) > 10:
-                    ts_diffs = np.diff(ts)
-                    ts_pos = ts_diffs[ts_diffs > 0]
-                    if len(ts_pos) > 0:
-                        dt = np.median(ts_pos)
-                        if dt > 0:
-                            fs_est = 1000.0 / dt
-                            if 10 <= fs_est <= 10000:
-                                fs = fs_est
-        # fallback: 用 timestamp_ms 估算
-        if fs == 0 and has_ts and ts is not None and len(ts) > 10:
-            diffs = np.diff(ts)
-            pos = diffs[diffs > 0]
-            if len(pos) > 0:
-                dt = np.median(pos)
-                if dt > 0:
-                    fs_est = 1000.0 / dt
-                    if 10 <= fs_est <= 10000:
-                        fs = fs_est
-        # 如果仍无法估算但已知是 MAX30003 512 SPS
-        if fs == 0:
-            fs = 512.0
+    # MAX30003 固定 512 SPS
+    fs = 512.0
 
     meta = {
         "file": os.path.basename(filepath),
@@ -268,6 +238,11 @@ def process_one(fpath, out_dir):
         return None
 
     fs = meta["fs"]
+    base = meta["file"].lower()
+    if "cal" in base:
+        print("  [ERROR] 文件名含 cal(校准)，不能用做外部 OPEN/SHORT/HUMAN 测试")
+    if not any(k in base for k in ["open", "short", "human"]):
+        print("  [WARNING] 文件名应包含 open/short/human 以明确测试模式")
     print(f"  分析: {meta['file']}  ({meta['samples']} samples @ {fs} Hz)")
 
     stats = analyze(ecg, fs, seq)

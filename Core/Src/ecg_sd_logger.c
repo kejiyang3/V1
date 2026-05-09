@@ -37,6 +37,26 @@ void ECG_SDLogger_RequestStop(void)
     s_stop_requested = 1;
 }
 
+void ECG_SDLogger_ClearQueue(void)
+{
+    if (Q_ECG_SDHandle == NULL) return;
+    ECG_SD_Record_t dummy;
+    while (osMessageQueueGet(Q_ECG_SDHandle, &dummy, NULL, 0) == osOK) {
+        /* drain old records */
+    }
+}
+
+uint32_t ECG_SDLogger_GetQueueCount(void)
+{
+    if (Q_ECG_SDHandle == NULL) return 0;
+    return (uint32_t)osMessageQueueGetCount(Q_ECG_SDHandle);
+}
+
+uint32_t ECG_SDLogger_GetQueueCapacity(void)
+{
+    return (uint32_t)ECG_SD_QUEUE_DEPTH;
+}
+
 void ECG_SDLogger_Enqueue(int16_t ecg)
 {
     if (Q_ECG_SDHandle == NULL) {
@@ -50,11 +70,12 @@ void ECG_SDLogger_Enqueue(int16_t ecg)
     ECG_SD_Record_t rec;
     rec.timestamp_ms = HAL_GetTick();
     rec.seq = s_ecg_seq++;
+    rec.sample_time_ms = g_ecg_rec.start_tick + (rec.seq * 1000UL) / 512UL;
     rec.ecg = ecg;
 
-    g_ecg_rec.ecg_sample_count++;
-
-    if (osMessageQueuePut(Q_ECG_SDHandle, &rec, 0, 0) != osOK) {
+    if (osMessageQueuePut(Q_ECG_SDHandle, &rec, 0, 0) == osOK) {
+        g_ecg_rec.ecg_sample_count++;
+    } else {
         g_ecg_rec.ecg_drop_count++;
     }
 }
@@ -95,7 +116,7 @@ static FRESULT ECG_SDLogger_OpenFile(void)
         return res;
     }
 
-    const char *header = "timestamp_ms,seq,ecg\r\n";
+    const char *header = "timestamp_ms,sample_time_ms,seq,ecg\r\n";
 
     APP_USB_LOG("[ECG_SD] OpenFile: before header write\r\n");
     res = f_write(&s_ecg_file, header, strlen(header), &bw);
@@ -204,8 +225,8 @@ void StartTask_ECG_SDWriter(void *argument)
 
         while (g_ecg_rec.state == ECG_REC_RECORDING || osMessageQueueGetCount(Q_ECG_SDHandle) > 0) {
             if (osMessageQueueGet(Q_ECG_SDHandle, &rec, NULL, pdMS_TO_TICKS(50)) == osOK) {
-                int n = snprintf(line, sizeof(line), "%lu,%lu,%d\r\n",
-                                 rec.timestamp_ms, rec.seq, rec.ecg);
+                int n = snprintf(line, sizeof(line), "%lu,%lu,%lu,%d\r\n",
+                                 rec.timestamp_ms, rec.sample_time_ms, rec.seq, rec.ecg);
 
                 if (n > 0) {
                     if (Mtx_SDCardHandle != NULL) {
@@ -245,7 +266,7 @@ void StartTask_ECG_SDWriter(void *argument)
         g_ecg_rec.state = ECG_REC_STOPPED;
         g_ecg_rec.request_stop = 0;
 
-        SD_DebugLog_WriteLine("CAL_TEST_STOPPED");
+        SD_DebugLog_WriteLine("RECORDING_STOPPED_EXTERNAL");
         SD_DebugLog_WriteSnapshot();
 
         APP_USB_LOG("[ECG_SD] stopped. samples=%lu written=%lu drop=%lu bytes=%lu\r\n",
