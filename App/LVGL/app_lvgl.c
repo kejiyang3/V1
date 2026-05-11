@@ -13,6 +13,7 @@
 #include "../../User/touch.h"
 #include "../../User/Config/usb_printf.h"
 #include "ecg_record_control.h"
+#include "max3003.h"
 
 /* 触摸手势 — 由 lv_port_indev.c 设置 */
 extern volatile uint8_t g_touch_gesture;
@@ -22,6 +23,7 @@ static uint8_t s_page = 0;  /* 0=Main, 1=Diag */
 
 /* ----- Page 1: Main 对象 ----- */
 static lv_obj_t *ui_label_title;
+static lv_obj_t *ui_label_lead;
 static lv_obj_t *ui_label_state;
 static lv_obj_t *ui_label_rate;
 static lv_obj_t *ui_label_file;
@@ -112,7 +114,7 @@ static void ui_update_cb(lv_timer_t *timer)
     /* ---- 页面可见性 ---- */
     /* Page 1 (Main) — 只隐藏顶层容器，子 label 自动跟随 */
     lv_obj_t *page1[] = {
-        ui_label_title, ui_label_state, ui_label_rate, ui_label_file,
+        ui_label_title, ui_label_lead, ui_label_state, ui_label_rate, ui_label_file,
         ui_label_samples, ui_label_drop,
         ui_btn_start, ui_btn_info
     };
@@ -136,6 +138,31 @@ static void ui_update_cb(lv_timer_t *timer)
             case ECG_REC_ERROR:     s = "ERROR";      break;
         }
         lv_label_set_text_fmt(ui_label_state, "State: %s", s);
+
+        /* 电极状态 */
+        {
+            MAX30003_LeadStatus_t lead;
+            MAX30003_GetLeadStatus(&lead);
+
+            if (lead.last_update_ms == 0) {
+                lv_label_set_text(ui_label_lead, "\347\224\265\346\236\201: \346\243\200\346\265\213\344\270\255");
+                lv_obj_set_style_text_color(ui_label_lead, lv_color_hex(0xFFAA00), 0);
+            } else if (lead.state == MAX30003_LEAD_ON) {
+                lv_label_set_text(ui_label_lead, "\347\224\265\346\236\201: \345\267\262\350\264\264\345\245\275");
+                lv_obj_set_style_text_color(ui_label_lead, lv_color_hex(0x88CC88), 0);
+            } else {
+                if ((lead.p_high || lead.p_low) && (lead.n_high || lead.n_low)) {
+                    lv_label_set_text(ui_label_lead, "\347\224\265\346\236\201: P/N\350\204\261\350\220\275");
+                } else if (lead.p_high || lead.p_low) {
+                    lv_label_set_text(ui_label_lead, "\347\224\265\346\236\201: P\350\204\261\350\220\275");
+                } else if (lead.n_high || lead.n_low) {
+                    lv_label_set_text(ui_label_lead, "\347\224\265\346\236\201: N\350\204\261\350\220\275");
+                } else {
+                    lv_label_set_text(ui_label_lead, "\347\224\265\346\236\201: \350\204\261\350\220\275");
+                }
+                lv_obj_set_style_text_color(ui_label_lead, lv_color_hex(0xCC3333), 0);
+            }
+        }
 
         /* 采样率估算（基于 fifo_sample_count，512Hz 应稳定） */
         if (now - last_tick >= 5000) {
@@ -169,8 +196,13 @@ static void ui_update_cb(lv_timer_t *timer)
 
     /* ---- Page 2 更新 ---- */
     if (s_page == 1) {
-        lv_label_set_text_fmt(ui_label_status_reg, "STATUS: 0x%06lX", g_ecg_rec.last_status);
-        lv_label_set_text_fmt(ui_label_pll_seen,   "PLL seen: %lu",  g_ecg_rec.pll_status_seen_count);
+        {
+            MAX30003_LeadStatus_t lead;
+            MAX30003_GetLeadStatus(&lead);
+            lv_label_set_text_fmt(ui_label_status_reg, "STATUS: 0x%06lX", lead.raw_status);
+            lv_label_set_text_fmt(ui_label_pll_seen,   "Lead: P_H%d P_L%d N_H%d N_L%d",
+                                  lead.p_high, lead.p_low, lead.n_high, lead.n_low);
+        }
         lv_label_set_text_fmt(ui_label_pll_edge,   "PLL edge: %lu",  g_ecg_rec.pll_edge_count);
         lv_label_set_text_fmt(ui_label_eovf,       "EOVF: %lu",      g_ecg_rec.fifo_eovf_count);
         lv_label_set_text_fmt(ui_label_written,    "Written: %lu",   g_ecg_rec.ecg_written_count);
@@ -210,29 +242,35 @@ void App_LVGL_TestUI(void)
     lv_obj_set_style_text_font(ui_label_title, &lv_font_montserrat_14, 0);
     lv_obj_align(ui_label_title, LV_ALIGN_TOP_MID, 0, 10);
 
+    /* Lead Status */
+    ui_label_lead = lv_label_create(lv_scr_act());
+    lv_label_set_text(ui_label_lead, "\347\224\265\346\236\201: \346\243\200\346\265\213\344\270\255");
+    lv_obj_set_style_text_color(ui_label_lead, lv_color_hex(0xFFAA00), 0);
+    lv_obj_align(ui_label_lead, LV_ALIGN_TOP_LEFT, 10, 28);
+
     /* State */
     ui_label_state = lv_label_create(lv_scr_act());
     lv_label_set_text(ui_label_state, "State: IDLE");
     lv_obj_set_style_text_color(ui_label_state, lv_color_hex(0xAAAAAA), 0);
-    lv_obj_align(ui_label_state, LV_ALIGN_TOP_MID, 0, 30);
+    lv_obj_align(ui_label_state, LV_ALIGN_TOP_LEFT, 10, 44);
 
     /* Rate */
     ui_label_rate = lv_label_create(lv_scr_act());
     lv_label_set_text(ui_label_rate, "Rate: 0 Hz");
     lv_obj_set_style_text_color(ui_label_rate, lv_color_hex(0x88CC88), 0);
-    lv_obj_align(ui_label_rate, LV_ALIGN_TOP_LEFT, 10, 48);
+    lv_obj_align(ui_label_rate, LV_ALIGN_TOP_LEFT, 10, 62);
 
     /* File */
     ui_label_file = lv_label_create(lv_scr_act());
     lv_label_set_text(ui_label_file, "File: ecg_001.csv");
     lv_obj_set_style_text_color(ui_label_file, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(ui_label_file, LV_ALIGN_TOP_LEFT, 10, 62);
+    lv_obj_align(ui_label_file, LV_ALIGN_TOP_LEFT, 10, 78);
 
     /* File +/- buttons */
     lv_obj_t *ui_btn;
     ui_btn = lv_btn_create(lv_scr_act());
     lv_obj_set_size(ui_btn, 36, 28);
-    lv_obj_align(ui_btn, LV_ALIGN_TOP_LEFT, 10, 78);
+    lv_obj_align(ui_btn, LV_ALIGN_TOP_LEFT, 10, 94);
     lv_obj_set_style_bg_color(ui_btn, lv_color_hex(0x555555), 0);
     lv_obj_set_style_radius(ui_btn, 8, 0);
     lv_obj_t *ld = lv_label_create(ui_btn);
@@ -243,7 +281,7 @@ void App_LVGL_TestUI(void)
 
     ui_btn = lv_btn_create(lv_scr_act());
     lv_obj_set_size(ui_btn, 36, 28);
-    lv_obj_align(ui_btn, LV_ALIGN_TOP_LEFT, 60, 78);
+    lv_obj_align(ui_btn, LV_ALIGN_TOP_LEFT, 60, 94);
     lv_obj_set_style_bg_color(ui_btn, lv_color_hex(0x555555), 0);
     lv_obj_set_style_radius(ui_btn, 8, 0);
     lv_obj_t *li = lv_label_create(ui_btn);
@@ -256,13 +294,13 @@ void App_LVGL_TestUI(void)
     ui_label_samples = lv_label_create(lv_scr_act());
     lv_label_set_text(ui_label_samples, "Samples: 0");
     lv_obj_set_style_text_color(ui_label_samples, lv_color_hex(0x88CC88), 0);
-    lv_obj_align(ui_label_samples, LV_ALIGN_TOP_LEFT, 10, 112);
+    lv_obj_align(ui_label_samples, LV_ALIGN_TOP_LEFT, 10, 128);
 
     /* Drop */
     ui_label_drop = lv_label_create(lv_scr_act());
     lv_label_set_text(ui_label_drop, "Drop: 0");
     lv_obj_set_style_text_color(ui_label_drop, lv_color_hex(0xCC8888), 0);
-    lv_obj_align(ui_label_drop, LV_ALIGN_TOP_LEFT, 10, 126);
+    lv_obj_align(ui_label_drop, LV_ALIGN_TOP_LEFT, 10, 142);
 
     /* Start/Stop */
     ui_btn_start = lv_btn_create(lv_scr_act());

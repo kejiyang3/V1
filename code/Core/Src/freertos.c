@@ -227,6 +227,9 @@ void StartTask_Sensor(void *argument)
 
   MAX30003_Init();
 
+  /* 初始读取电极状态 */
+  MAX30003_PollLeadStatus();
+
   SD_DebugLog_WriteLine("MAX30003_INIT_DONE");
 
   /* 初始不采集 */
@@ -289,6 +292,13 @@ void StartTask_Sensor(void *argument)
       MAX30003_Task();
     } else {
       osDelay(20);
+    }
+
+    /* 低频轮询电极状态 (4Hz)，Idle 也持续检测 */
+    static uint32_t last_lead_poll = 0;
+    if (HAL_GetTick() - last_lead_poll >= 250) {
+        last_lead_poll = HAL_GetTick();
+        MAX30003_PollLeadStatus();
     }
 
     if (g_ecg_rec.request_save_info) {

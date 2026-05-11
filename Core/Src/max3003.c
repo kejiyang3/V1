@@ -14,6 +14,9 @@ __attribute__((weak)) void Packagedata_AddEcgSample(int16_t ecg)
     /* 默认空实现, 由外部模块 (如 edf_storage.c) 覆盖 */
 }
 
+/* DC Lead-Off 状态缓存 */
+static volatile MAX30003_LeadStatus_t g_lead_status;
+
 /**
   * @brief  CS 引脚初始化
   */
@@ -156,8 +159,9 @@ void MAX30003_Init(void)
 
     APP_USB_LOG("[MAX30003] INFO=0x%06lX\r\n", info1);
 
+    /* CNFG_GEN: 基础 ECG 配置 + DC Lead-Off Detection (10nA, ±300mV) */
     if (!MAX30003_WriteVerify(MAX30003_CNFG_GEN,
-                              MAX30003_CNFG_GEN_NORMAL,
+                              MAX30003_CNFG_GEN_NORMAL | MAX30003_CNFG_GEN_DCLOFF,
                               "CNFG_GEN")) return;
 
 #if MAX30003_USE_INTERNAL_CAL_TEST
@@ -181,6 +185,11 @@ void MAX30003_Init(void)
     if (!MAX30003_WriteVerify(MAX30003_CNFG_ECG,
                               MAX30003_CNFG_ECG_NORMAL,
                               "CNFG_ECG")) return;
+
+    /* Auto Fast Recovery: 双电极运动场景快速恢复 */
+    if (!MAX30003_WriteVerify(MAX30003_MNGR_DYN,
+                              MAX30003_MNGR_DYN_AUTO_FAST,
+                              "MNGR_DYN")) return;
 
     /* 等待 PLL 锁定 */
     uint8_t retry = 50;
@@ -352,6 +361,7 @@ void MAX30003_Task(void)
         }
 
         MAX30003_UpdateStatusStats(status_reg);
+        MAX30003_UpdateLeadStatusFromStatus(status_reg);
 
         /* 处理 FIFO overflow */
         if (status_reg & MAX30003_STATUS_EOVF) {
@@ -416,6 +426,42 @@ int32_t MAX30003_Read_Sample(void)
         return 0;
     }
     return (int32_t)raw_data;
+}
+
+void MAX30003_UpdateLeadStatusFromStatus(uint32_t status)
+{
+    MAX30003_LeadStatus_t s;
+
+    s.raw_status = status;
+    s.last_update_ms = HAL_GetTick();
+
+    s.dc_loff_int = (status >> 20) & 0x01;
+    s.p_high      = (status >> 3)  & 0x01;
+    s.p_low       = (status >> 2)  & 0x01;
+    s.n_high      = (status >> 1)  & 0x01;
+    s.n_low       = (status >> 0)  & 0x01;
+
+    if (s.dc_loff_int || s.p_high || s.p_low || s.n_high || s.n_low) {
+        s.state = MAX30003_LEAD_OFF;
+    } else {
+        s.state = MAX30003_LEAD_ON;
+    }
+
+    g_lead_status = s;
+}
+
+void MAX30003_GetLeadStatus(MAX30003_LeadStatus_t *out)
+{
+    if (out == NULL) return;
+    *out = g_lead_status;
+}
+
+void MAX30003_PollLeadStatus(void)
+{
+    uint32_t status = 0;
+    if (MAX30003_ReadReg(MAX30003_STATUS, &status) == HAL_OK) {
+        MAX30003_UpdateLeadStatusFromStatus(status);
+    }
 }
 
 void MAX30003_Diagnostic_Dump(void)

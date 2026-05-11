@@ -1,8 +1,9 @@
 """
 ECG CSV 通用信号分析工具 — 增强版
 - 支持文件夹批量分析或单个文件
+- 50Hz 陷波滤波
 - seq 连续性检查、统计、FFT、THD
-- 保存 PNG 波形图 + 频谱图
+- 显示波形图 + 频谱图
 - 报告保存为 txt + json 汇总
 
 用法:
@@ -13,8 +14,29 @@ import os, sys, glob, json
 import numpy as np
 import pandas as pd
 import matplotlib
-matplotlib.use("Agg")  # 不依赖 GUI
 import matplotlib.pyplot as plt
+
+# 50Hz 陷波滤波
+_scipy_available = False
+try:
+    from scipy import signal as scipy_signal
+    _scipy_available = True
+except ImportError:
+    pass
+
+
+def notch_filter_50hz(data, fs):
+    """50Hz IIR 陷波滤波，抑制工频干扰"""
+    if not _scipy_available:
+        print("  [提示] 未安装 scipy，跳过 50Hz 陷波滤波 (pip install scipy)")
+        return data
+    if fs <= 0:
+        return data
+    try:
+        b, a = scipy_signal.iirnotch(50.0, 30.0, fs)
+        return scipy_signal.filtfilt(b, a, data)
+    except Exception:
+        return data
 
 
 def read_csv(filepath):
@@ -31,49 +53,19 @@ def read_csv(filepath):
     has_seq = "seq" in df.columns
     seq = df["seq"].values.astype(np.int64) if has_seq else np.arange(n, dtype=np.int64)
 
-    # 解析 timestamp_ms（仅用于辅助参考）
+    # 解析 timestamp_ms
     has_ts = "timestamp_ms" in df.columns
     ts = df["timestamp_ms"].values.astype(np.float64) if has_ts else None
 
-    # 采样率：优先用 seq 推算
-    fs = 0
-    if n > 10:
-        if has_seq:
-            seq_diff = np.diff(seq)
-            pos = seq_diff[seq_diff > 0]
-            if len(pos) > 0:
-                median_step = np.median(pos)
-                # seq 间的时间差都是 1 (一个样本)，512Hz 下 1/512 ≈ 1.95ms
-                # 实际采样率由 MAX30003 固定 512Hz 决定，所以直接用 seq
-                if has_ts and ts is not None and len(ts) > 10:
-                    ts_diffs = np.diff(ts)
-                    ts_pos = ts_diffs[ts_diffs > 0]
-                    if len(ts_pos) > 0:
-                        dt = np.median(ts_pos)
-                        if dt > 0:
-                            fs_est = 1000.0 / dt
-                            if 10 <= fs_est <= 10000:
-                                fs = fs_est
-        # fallback: 用 timestamp_ms 估算
-        if fs == 0 and has_ts and ts is not None and len(ts) > 10:
-            diffs = np.diff(ts)
-            pos = diffs[diffs > 0]
-            if len(pos) > 0:
-                dt = np.median(pos)
-                if dt > 0:
-                    fs_est = 1000.0 / dt
-                    if 10 <= fs_est <= 10000:
-                        fs = fs_est
-        # 如果仍无法估算但已知是 MAX30003 512 SPS
-        if fs == 0:
-            fs = 512.0
+    # MAX30003 固定 512 SPS，不用 timestamp_ms 估算
+    fs = 512.0
 
     meta = {
         "file": os.path.basename(filepath),
         "samples": n,
         "has_seq": has_seq,
         "has_ts": has_ts,
-        "fs": round(fs, 1),
+        "fs": fs,
         "path": filepath,
     }
     return ecg, meta, seq, ts
@@ -184,68 +176,72 @@ def analyze(signal, fs, seq=None):
 def plot_signal(signal, fs, stats, meta, out_path):
     n = len(signal)
     t_total = n / fs if fs > 0 else 0
-
-    # 用于显示的 seq 时间轴
     t = np.arange(n) / fs
 
-    fig, axes = plt.subplots(3, 1, figsize=(14, 9))
+    # 50Hz 陷波滤波
+    sig_filtered = notch_filter_50hz(signal, fs)
 
-    # ---- 子图1: 前 10 秒时域 ----
+    fig, axes = plt.subplots(3, 1, figsize=(14, 10))
+
+    # ---- 子图1: 前 10 秒时域 (raw + filtered 叠加) ----
     win_10s = min(int(fs * 10), n)
     ax = axes[0]
-    ax.plot(t[:win_10s], signal[:win_10s], linewidth=0.7, color="#1f77b4")
+    ax.plot(t[:win_10s], signal[:win_10s], linewidth=0.7, color="#1f77b4", alpha=0.5, label="Raw")
+    if sig_filtered is not signal:
+        ax.plot(t[:win_10s], sig_filtered[:win_10s], linewidth=0.7, color="#d62728", label="50Hz Notch")
     ax.set_xlabel("Time (s)")
-    ax.set_ylabel("ECG raw")
+    ax.set_ylabel("ECG")
     ax.set_title(f"Time Domain (first {win_10s/fs:.1f}s)")
+    ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
-    # ---- 子图2: 完整信号概览（降采样显示）----
+    # ---- 子图2: 完整信号概览 + 滤波对比 ----
     ax = axes[1]
     if n > 50000:
         step = max(1, n // 20000)
         t_ds = t[::step]
-        sig_ds = signal[::step]
-        ax.plot(t_ds, sig_ds, linewidth=0.5, color="#1f77b4", alpha=0.7)
-        ax.set_xlabel("Time (s)")
-        ax.set_ylabel("ECG raw")
-        ax.set_title(f"Full Signal Overview ({n} samples, {t_total:.0f}s) - decimated")
+        ax.plot(t_ds, signal[::step], linewidth=0.5, color="#1f77b4", alpha=0.4, label="Raw")
+        if sig_filtered is not signal:
+            ax.plot(t_ds, sig_filtered[::step], linewidth=0.5, color="#d62728", alpha=0.7, label="Filtered")
     else:
-        ax.plot(t, signal, linewidth=0.5, color="#1f77b4", alpha=0.7)
-        ax.set_xlabel("Time (s)")
-        ax.set_ylabel("ECG raw")
-        ax.set_title(f"Full Signal ({n} samples, {t_total:.1f}s)")
+        ax.plot(t, signal, linewidth=0.4, color="#1f77b4", alpha=0.4, label="Raw")
+        if sig_filtered is not signal:
+            ax.plot(t, sig_filtered, linewidth=0.5, color="#d62728", alpha=0.7, label="Filtered")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("ECG")
+    ax.set_title(f"Full Signal ({n} samples, {t_total:.0f}s)")
+    ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
-    # ---- 子图3: 频谱 ----
+    # ---- 子图3: 频谱 (raw + filtered 对比) ----
     if fs > 10 and n > 200:
         windowed = signal * np.hanning(n)
-        fft_vals = np.fft.rfft(windowed)
-        fft_mag = np.abs(fft_vals) / n
+        fft_mag = np.abs(np.fft.rfft(windowed)) / n
         freqs = np.fft.rfftfreq(n, d=1/fs)
 
         ax = axes[2]
-        ax.plot(freqs, fft_mag, linewidth=0.7, color="#d62728")
+        ax.plot(freqs, fft_mag, linewidth=0.6, color="#1f77b4", alpha=0.6, label="Raw")
+
+        if sig_filtered is not signal:
+            windowed_f = sig_filtered * np.hanning(n)
+            fft_mag_f = np.abs(np.fft.rfft(windowed_f)) / n
+            ax.plot(freqs, fft_mag_f, linewidth=0.8, color="#d62728", label="50Hz Notch")
+
+        # 标记 50Hz 工频
+        ax.axvline(x=50, color="gray", linestyle="--", alpha=0.5, linewidth=0.8)
+        ax.annotate("50Hz", xy=(50, ax.get_ylim()[1]*0.9), fontsize=8, color="gray")
+
         # 标记主频
         if stats["dominant_freqs"]:
             f0 = stats["dominant_freqs"][0]
-            m0 = stats["dominant_mags"][0]
-            ax.axvline(x=f0, color="green", linestyle="--", alpha=0.7, linewidth=1)
-            ax.annotate(f"{f0}Hz", xy=(f0, m0), xytext=(f0 + 0.5, m0 * 0.9),
-                        fontsize=10, color="green")
-            # 标记谐波
-            for h_idx, h in enumerate(range(2, 6)):
-                fh = f0 * h
-                if fh > freqs[-1]:
-                    break
-                idx_h = np.argmin(np.abs(freqs - fh))
-                ax.axvline(x=freqs[idx_h], color="orange", linestyle=":", alpha=0.4, linewidth=0.8)
+            ax.axvline(x=f0, color="green", linestyle="--", alpha=0.5, linewidth=0.8)
+            ax.annotate(f"{f0}Hz", xy=(f0, ax.get_ylim()[1]*0.8), fontsize=9, color="green")
 
-        ax.set_xlim(0, min(50, freqs[-1]))
+        ax.set_xlim(0, min(60, freqs[-1]))
         ax.set_xlabel("Frequency (Hz)")
         ax.set_ylabel("Magnitude")
         ax.set_title("FFT Spectrum")
-        ax.legend(["Spectrum", f"Fundamental {stats['dominant_freqs'][0] if stats['dominant_freqs'] else '?'}Hz", "Harmonics"],
-                  fontsize=8)
+        ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
     else:
         ax = axes[2]
@@ -253,7 +249,8 @@ def plot_signal(signal, fs, stats, meta, out_path):
 
     plt.tight_layout()
     plt.savefig(out_path, dpi=150)
-    plt.close(fig)
+    print(f"    图片: {out_path}")
+    plt.show()
 
 
 def process_one(fpath, out_dir):
@@ -315,12 +312,11 @@ def process_one(fpath, out_dir):
         f.write("\n".join(lines))
     print(f"    报告: {rpath}")
 
-    # 保存图片
+    # 保存图片 + 显示窗口
     pname = meta["file"].replace(".csv", "_plot.png")
     ppath = os.path.join(out_dir, pname)
     if fs > 0:
         plot_signal(ecg, fs, stats, meta, ppath)
-        print(f"    图片: {ppath}")
 
     return {
         "file": meta["file"],

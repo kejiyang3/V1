@@ -51,9 +51,14 @@ extern "C" {
 #define MAX30003_ECG_FIFO_BURST       0x20  /* Burst 模式地址 */
 
 /* ========== STATUS 寄存器关键位 ========== */
-#define MAX30003_STATUS_EINT    0x800000UL
-#define MAX30003_STATUS_EOVF    0x400000UL
-#define MAX30003_STATUS_PLLINT  0x000100UL
+#define MAX30003_STATUS_EINT        0x800000UL
+#define MAX30003_STATUS_EOVF        0x400000UL
+#define MAX30003_STATUS_DCLOFFINT   (1UL << 20)
+#define MAX30003_STATUS_PLLINT      0x000100UL
+#define MAX30003_STATUS_LDOFF_PH    (1UL << 3)
+#define MAX30003_STATUS_LDOFF_PL    (1UL << 2)
+#define MAX30003_STATUS_LDOFF_NH    (1UL << 1)
+#define MAX30003_STATUS_LDOFF_NL    (1UL << 0)
 
 /* ========== 内部校准测试模式 ========== */
 /* 设置为 1 启用内部 1Hz 校准波，0 为正常外部 ECG 输入 */
@@ -71,6 +76,10 @@ extern "C" {
 /* EN_ECG=1, FMSTR=00, EN_RBIAS=01, RBIASV=01 (100M), RBIASP=1, RBIASN=1 */
 #define CNFG_GEN_EN_ECG         (1UL << 19)
 #define CNFG_GEN_FMSTR_32K      (0UL << 20)
+#define CNFG_GEN_EN_DCLOFF      (1UL << 12)
+#define CNFG_GEN_DCLOFF_IPOL    (0UL << 11)
+#define CNFG_GEN_DCLOFF_IMAG_20NA  (3UL << 8)
+#define CNFG_GEN_DCLOFF_VTH_300MV (0UL << 6)
 #define CNFG_GEN_EN_RBIAS_EN    (1UL << 4)
 #define CNFG_GEN_RBIASV_100M    (1UL << 2)
 #define CNFG_GEN_RBIASP_EN      (1UL << 1)
@@ -79,14 +88,22 @@ extern "C" {
                                   CNFG_GEN_EN_RBIAS_EN | CNFG_GEN_RBIASV_100M | \
                                   CNFG_GEN_RBIASP_EN | CNFG_GEN_RBIASN_EN)
 
+/* 启用 DC Lead-Off Detection (在 CNFG_GEN_NORMAL 基础上叠加) */
+#define MAX30003_CNFG_GEN_DCLOFF (CNFG_GEN_EN_DCLOFF | CNFG_GEN_DCLOFF_IPOL | \
+                                  CNFG_GEN_DCLOFF_IMAG_20NA | CNFG_GEN_DCLOFF_VTH_300MV)
+
 /* ========== CNFG_ECG 位域 ========== */
-/* RATE=00 (512 SPS), GAIN=00 (20x), DHPF=1 (0.5Hz), DLPF=10 (100Hz) */
+/* RATE=00 (512 SPS), GAIN=00 (20x), DHPF=1 (0.5Hz), DLPF=01 (40Hz) 抗50Hz工频 */
 #define CNFG_ECG_RATE_512SPS    (0UL << 22)
 #define CNFG_ECG_GAIN_20X       (0UL << 16)
 #define CNFG_ECG_DHPF_0_5HZ     (1UL << 14)
-#define CNFG_ECG_DLPF_100HZ     (2UL << 12)
+#define CNFG_ECG_DLPF_40HZ      (1UL << 12)
 #define MAX30003_CNFG_ECG_NORMAL (CNFG_ECG_RATE_512SPS | CNFG_ECG_GAIN_20X | \
-                                  CNFG_ECG_DHPF_0_5HZ | CNFG_ECG_DLPF_100HZ)
+                                  CNFG_ECG_DHPF_0_5HZ | CNFG_ECG_DLPF_40HZ)
+
+/* ========== MNGR_DYN 配置 ========== */
+/* FAST[1:0]=10 (Auto Fast Recovery), FAST_TH[5:0]=0x3F */
+#define MAX30003_MNGR_DYN_AUTO_FAST  0xBF0000UL
 
 /* ========== EN_INT 配置 ========== */
 #define MAX30003_EN_INT_IDLE    0x000002UL   /* INTB_TYPE=10 (Open-Drain), 暂不使能 EINT/EOVF */
@@ -101,6 +118,24 @@ static inline uint8_t MAX30003_MakeCmd(uint8_t reg, uint8_t isRead)
 {
     return (uint8_t)(((reg & 0x7F) << 1) | (isRead ? 1U : 0U));
 }
+
+/* ========== 电极脱落检测状态 ========== */
+typedef enum {
+    MAX30003_LEAD_UNKNOWN = 0,
+    MAX30003_LEAD_ON,
+    MAX30003_LEAD_OFF
+} MAX30003_LeadState_t;
+
+typedef struct {
+    MAX30003_LeadState_t state;
+    uint8_t dc_loff_int;
+    uint8_t p_high;
+    uint8_t p_low;
+    uint8_t n_high;
+    uint8_t n_low;
+    uint32_t raw_status;
+    uint32_t last_update_ms;
+} MAX30003_LeadStatus_t;
 
 /* ========== 对外 API（在 max30003.c 实现） ========== */
 HAL_StatusTypeDef MAX30003_WriteReg(uint8_t reg, uint32_t val24);
@@ -125,6 +160,9 @@ void MAX30003_Synch(void);
 void MAX30003_FifoReset(void);
 int32_t MAX30003_Read_Sample(void);
 void MAX30003_Diagnostic_Dump(void);
+void MAX30003_UpdateLeadStatusFromStatus(uint32_t status);
+void MAX30003_GetLeadStatus(MAX30003_LeadStatus_t *out);
+void MAX30003_PollLeadStatus(void);
 #ifdef __cplusplus
 }
 #endif
