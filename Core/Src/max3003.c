@@ -15,7 +15,14 @@ __attribute__((weak)) void Packagedata_AddEcgSample(int16_t ecg)
 }
 
 /* DC Lead-Off 状态缓存 */
-static volatile MAX30003_LeadStatus_t g_lead_status;
+static MAX30003_LeadStatus_t g_lead_status = {
+    .state = MAX30003_LEAD_UNKNOWN,
+    .p_off = 0,
+    .n_off = 0,
+    .dc_loff = 0,
+    .raw_status = 0,
+    .last_update_ms = 0
+};
 
 /**
   * @brief  CS 引脚初始化
@@ -159,9 +166,9 @@ void MAX30003_Init(void)
 
     APP_USB_LOG("[MAX30003] INFO=0x%06lX\r\n", info1);
 
-    /* CNFG_GEN: 基础 ECG 配置 + DC Lead-Off Detection (10nA, ±300mV) */
+    /* CNFG_GEN: ECG + DC Lead-Off 永久启用 (10nA, ±300mV) */
     if (!MAX30003_WriteVerify(MAX30003_CNFG_GEN,
-                              MAX30003_CNFG_GEN_NORMAL | MAX30003_CNFG_GEN_DCLOFF,
+                              MAX30003_CNFG_GEN_NORMAL,
                               "CNFG_GEN")) return;
 
 #if MAX30003_USE_INTERNAL_CAL_TEST
@@ -245,6 +252,7 @@ void MAX30003_StartStream(void)
     (void)MAX30003_ReadReg(MAX30003_STATUS, &status3);
 
     g_ecg_rec.last_status = status3;
+    MAX30003_UpdateLeadStatus(status3);
 
     APP_USB_LOG("[MAX30003] StartStream status1=0x%06lX status2=0x%06lX status3=0x%06lX\r\n",
                 status1, status2, status3);
@@ -361,7 +369,7 @@ void MAX30003_Task(void)
         }
 
         MAX30003_UpdateStatusStats(status_reg);
-        MAX30003_UpdateLeadStatusFromStatus(status_reg);
+        MAX30003_UpdateLeadStatus(status_reg);
 
         /* 处理 FIFO overflow */
         if (status_reg & MAX30003_STATUS_EOVF) {
@@ -428,26 +436,24 @@ int32_t MAX30003_Read_Sample(void)
     return (int32_t)raw_data;
 }
 
-void MAX30003_UpdateLeadStatusFromStatus(uint32_t status)
+void MAX30003_UpdateLeadStatus(uint32_t status)
 {
-    MAX30003_LeadStatus_t s;
+    uint8_t ph = (status & MAX30003_STATUS_LDOFF_PH) ? 1 : 0;
+    uint8_t pl = (status & MAX30003_STATUS_LDOFF_PL) ? 1 : 0;
+    uint8_t nh = (status & MAX30003_STATUS_LDOFF_NH) ? 1 : 0;
+    uint8_t nl = (status & MAX30003_STATUS_LDOFF_NL) ? 1 : 0;
 
-    s.raw_status = status;
-    s.last_update_ms = HAL_GetTick();
+    g_lead_status.raw_status = status;
+    g_lead_status.last_update_ms = HAL_GetTick();
+    g_lead_status.dc_loff = (status & MAX30003_STATUS_DCLOFFINT) ? 1 : 0;
+    g_lead_status.p_off = (ph || pl) ? 1 : 0;
+    g_lead_status.n_off = (nh || nl) ? 1 : 0;
 
-    s.dc_loff_int = (status >> 20) & 0x01;
-    s.p_high      = (status >> 3)  & 0x01;
-    s.p_low       = (status >> 2)  & 0x01;
-    s.n_high      = (status >> 1)  & 0x01;
-    s.n_low       = (status >> 0)  & 0x01;
-
-    if (s.dc_loff_int || s.p_high || s.p_low || s.n_high || s.n_low) {
-        s.state = MAX30003_LEAD_OFF;
+    if (g_lead_status.dc_loff || ph || pl || nh || nl) {
+        g_lead_status.state = MAX30003_LEAD_OFF;
     } else {
-        s.state = MAX30003_LEAD_ON;
+        g_lead_status.state = MAX30003_LEAD_ON;
     }
-
-    g_lead_status = s;
 }
 
 void MAX30003_GetLeadStatus(MAX30003_LeadStatus_t *out)
@@ -460,7 +466,8 @@ void MAX30003_PollLeadStatus(void)
 {
     uint32_t status = 0;
     if (MAX30003_ReadReg(MAX30003_STATUS, &status) == HAL_OK) {
-        MAX30003_UpdateLeadStatusFromStatus(status);
+        MAX30003_UpdateStatusStats(status);
+        MAX30003_UpdateLeadStatus(status);
     }
 }
 

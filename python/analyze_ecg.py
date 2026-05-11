@@ -28,12 +28,24 @@ except ImportError:
 def notch_filter_50hz(data, fs):
     """50Hz IIR 陷波滤波，抑制工频干扰"""
     if not _scipy_available:
-        print("  [提示] 未安装 scipy，跳过 50Hz 陷波滤波 (pip install scipy)")
         return data
     if fs <= 0:
         return data
     try:
         b, a = scipy_signal.iirnotch(50.0, 30.0, fs)
+        return scipy_signal.filtfilt(b, a, data)
+    except Exception:
+        return data
+
+
+def lowpass_40hz(data, fs):
+    """40Hz Butterworth 低通滤波 (5阶, 零相位)"""
+    if not _scipy_available:
+        return data
+    if fs <= 0:
+        return data
+    try:
+        b, a = scipy_signal.butter(5, 40.0, fs=fs, btype='low')
         return scipy_signal.filtfilt(b, a, data)
     except Exception:
         return data
@@ -178,8 +190,9 @@ def plot_signal(signal, fs, stats, meta, out_path):
     t_total = n / fs if fs > 0 else 0
     t = np.arange(n) / fs
 
-    # 50Hz 陷波滤波
-    sig_filtered = notch_filter_50hz(signal, fs)
+    # 50Hz 陷波 + 40Hz 低通
+    sig_notch = notch_filter_50hz(signal, fs)
+    sig_filtered = lowpass_40hz(sig_notch, fs)
 
     fig, axes = plt.subplots(3, 1, figsize=(14, 10))
 

@@ -73,32 +73,33 @@ extern "C" {
 #define MAX30003_CNFG_EMUX_CAL_DIFF        0x3B0000UL
 
 /* ========== CNFG_GEN 位域 ========== */
-/* EN_ECG=1, FMSTR=00, EN_RBIAS=01, RBIASV=01 (100M), RBIASP=1, RBIASN=1 */
-#define CNFG_GEN_EN_ECG         (1UL << 19)
-#define CNFG_GEN_FMSTR_32K      (0UL << 20)
-#define CNFG_GEN_EN_DCLOFF      (1UL << 12)
-#define CNFG_GEN_DCLOFF_IPOL    (0UL << 11)
-#define CNFG_GEN_DCLOFF_IMAG_20NA  (3UL << 8)
-#define CNFG_GEN_DCLOFF_VTH_300MV (0UL << 6)
-#define CNFG_GEN_EN_RBIAS_EN    (1UL << 4)
-#define CNFG_GEN_RBIASV_100M    (1UL << 2)
-#define CNFG_GEN_RBIASP_EN      (1UL << 1)
-#define CNFG_GEN_RBIASN_EN      (1UL << 0)
+#define CNFG_GEN_EN_ECG             (1UL << 19)
+#define CNFG_GEN_FMSTR_32K          (0UL << 20)
+#define CNFG_GEN_EN_DCLOFF_ECGPN    (1UL << 12)
+#define CNFG_GEN_DCLOFF_IPOL_PU_ND  (0UL << 11)
+#define CNFG_GEN_DCLOFF_IMAG_10NA   (2UL << 8)
+#define CNFG_GEN_DCLOFF_IMAG_20NA   (3UL << 8)
+#define CNFG_GEN_DCLOFF_VTH_300MV   (0UL << 6)
+#define CNFG_GEN_EN_RBIAS_EN        (1UL << 4)
+#define CNFG_GEN_RBIASV_100M        (1UL << 2)
+#define CNFG_GEN_RBIASP_EN          (1UL << 1)
+#define CNFG_GEN_RBIASN_EN          (1UL << 0)
+/* 正常配置: ECG + DC Lead-Off 永久启用 (10nA, ±300mV) */
 #define MAX30003_CNFG_GEN_NORMAL (CNFG_GEN_EN_ECG | CNFG_GEN_FMSTR_32K | \
+                                  CNFG_GEN_EN_DCLOFF_ECGPN | \
+                                  CNFG_GEN_DCLOFF_IPOL_PU_ND | \
+                                  CNFG_GEN_DCLOFF_IMAG_10NA | \
+                                  CNFG_GEN_DCLOFF_VTH_300MV | \
                                   CNFG_GEN_EN_RBIAS_EN | CNFG_GEN_RBIASV_100M | \
                                   CNFG_GEN_RBIASP_EN | CNFG_GEN_RBIASN_EN)
-
-/* 启用 DC Lead-Off Detection (在 CNFG_GEN_NORMAL 基础上叠加) */
-#define MAX30003_CNFG_GEN_DCLOFF (CNFG_GEN_EN_DCLOFF | CNFG_GEN_DCLOFF_IPOL | \
-                                  CNFG_GEN_DCLOFF_IMAG_20NA | CNFG_GEN_DCLOFF_VTH_300MV)
 
 /* ========== CNFG_ECG 位域 ========== */
 /* RATE=00 (512 SPS), GAIN=00 (20x), DHPF=1 (0.5Hz), DLPF=01 (40Hz) 抗50Hz工频 */
 #define CNFG_ECG_RATE_512SPS    (0UL << 22)
-#define CNFG_ECG_GAIN_20X       (0UL << 16)
+#define CNFG_ECG_GAIN_40X       (1UL << 16)
 #define CNFG_ECG_DHPF_0_5HZ     (1UL << 14)
 #define CNFG_ECG_DLPF_40HZ      (1UL << 12)
-#define MAX30003_CNFG_ECG_NORMAL (CNFG_ECG_RATE_512SPS | CNFG_ECG_GAIN_20X | \
+#define MAX30003_CNFG_ECG_NORMAL (CNFG_ECG_RATE_512SPS | CNFG_ECG_GAIN_40X | \
                                   CNFG_ECG_DHPF_0_5HZ | CNFG_ECG_DLPF_40HZ)
 
 /* ========== MNGR_DYN 配置 ========== */
@@ -128,11 +129,9 @@ typedef enum {
 
 typedef struct {
     MAX30003_LeadState_t state;
-    uint8_t dc_loff_int;
-    uint8_t p_high;
-    uint8_t p_low;
-    uint8_t n_high;
-    uint8_t n_low;
+    uint8_t p_off;       /* ECGP 脱落 */
+    uint8_t n_off;       /* ECGN 脱落 */
+    uint8_t dc_loff;     /* DCLOFFINT */
     uint32_t raw_status;
     uint32_t last_update_ms;
 } MAX30003_LeadStatus_t;
@@ -160,7 +159,7 @@ void MAX30003_Synch(void);
 void MAX30003_FifoReset(void);
 int32_t MAX30003_Read_Sample(void);
 void MAX30003_Diagnostic_Dump(void);
-void MAX30003_UpdateLeadStatusFromStatus(uint32_t status);
+void MAX30003_UpdateLeadStatus(uint32_t status);
 void MAX30003_GetLeadStatus(MAX30003_LeadStatus_t *out);
 void MAX30003_PollLeadStatus(void);
 #ifdef __cplusplus

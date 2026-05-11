@@ -139,28 +139,25 @@ static void ui_update_cb(lv_timer_t *timer)
         }
         lv_label_set_text_fmt(ui_label_state, "State: %s", s);
 
-        /* 电极状态 */
+        /* 电极状态 — 纯英文文本 */
         {
             MAX30003_LeadStatus_t lead;
             MAX30003_GetLeadStatus(&lead);
 
             if (lead.last_update_ms == 0) {
-                lv_label_set_text(ui_label_lead, "\347\224\265\346\236\201: \346\243\200\346\265\213\344\270\255");
-                lv_obj_set_style_text_color(ui_label_lead, lv_color_hex(0xFFAA00), 0);
+                lv_label_set_text(ui_label_lead, "LEAD: UNKNOWN");
             } else if (lead.state == MAX30003_LEAD_ON) {
-                lv_label_set_text(ui_label_lead, "\347\224\265\346\236\201: \345\267\262\350\264\264\345\245\275");
-                lv_obj_set_style_text_color(ui_label_lead, lv_color_hex(0x88CC88), 0);
+                lv_label_set_text(ui_label_lead, "LEAD: ON");
             } else {
-                if ((lead.p_high || lead.p_low) && (lead.n_high || lead.n_low)) {
-                    lv_label_set_text(ui_label_lead, "\347\224\265\346\236\201: P/N\350\204\261\350\220\275");
-                } else if (lead.p_high || lead.p_low) {
-                    lv_label_set_text(ui_label_lead, "\347\224\265\346\236\201: P\350\204\261\350\220\275");
-                } else if (lead.n_high || lead.n_low) {
-                    lv_label_set_text(ui_label_lead, "\347\224\265\346\236\201: N\350\204\261\350\220\275");
+                if (lead.p_off && lead.n_off) {
+                    lv_label_set_text(ui_label_lead, "LEAD: P_N_OFF");
+                } else if (lead.p_off) {
+                    lv_label_set_text(ui_label_lead, "LEAD: P_OFF");
+                } else if (lead.n_off) {
+                    lv_label_set_text(ui_label_lead, "LEAD: N_OFF");
                 } else {
-                    lv_label_set_text(ui_label_lead, "\347\224\265\346\236\201: \350\204\261\350\220\275");
+                    lv_label_set_text(ui_label_lead, "LEAD: OFF");
                 }
-                lv_obj_set_style_text_color(ui_label_lead, lv_color_hex(0xCC3333), 0);
             }
         }
 
@@ -200,8 +197,8 @@ static void ui_update_cb(lv_timer_t *timer)
             MAX30003_LeadStatus_t lead;
             MAX30003_GetLeadStatus(&lead);
             lv_label_set_text_fmt(ui_label_status_reg, "STATUS: 0x%06lX", lead.raw_status);
-            lv_label_set_text_fmt(ui_label_pll_seen,   "Lead: P_H%d P_L%d N_H%d N_L%d",
-                                  lead.p_high, lead.p_low, lead.n_high, lead.n_low);
+            lv_label_set_text_fmt(ui_label_pll_seen,   "Lead: P_OFF=%d N_OFF=%d DCL=%d",
+                                  lead.p_off, lead.n_off, lead.dc_loff);
         }
         lv_label_set_text_fmt(ui_label_pll_edge,   "PLL edge: %lu",  g_ecg_rec.pll_edge_count);
         lv_label_set_text_fmt(ui_label_eovf,       "EOVF: %lu",      g_ecg_rec.fifo_eovf_count);
@@ -244,8 +241,8 @@ void App_LVGL_TestUI(void)
 
     /* Lead Status */
     ui_label_lead = lv_label_create(lv_scr_act());
-    lv_label_set_text(ui_label_lead, "\347\224\265\346\236\201: \346\243\200\346\265\213\344\270\255");
-    lv_obj_set_style_text_color(ui_label_lead, lv_color_hex(0xFFAA00), 0);
+    lv_label_set_text(ui_label_lead, "LEAD: UNKNOWN");
+    lv_obj_set_style_text_color(ui_label_lead, lv_color_hex(0xFFFFFF), 0);
     lv_obj_align(ui_label_lead, LV_ALIGN_TOP_LEFT, 10, 28);
 
     /* State */
