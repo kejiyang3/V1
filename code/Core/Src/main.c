@@ -123,6 +123,15 @@ int main(void)
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
   ECG_FCLK_MCO_ForceInit();
+
+  /* I2C3 诊断模式分流 (均 while(1), 不会返回) */
+#if I2C3_DIAG_MODE == I2C3_DIAG_MODE_OD_SCL_SDA_10HZ
+    I2C3_OD_SclSda_Test10Hz();
+#elif I2C3_DIAG_MODE == I2C3_DIAG_MODE_PP_ALL4_10HZ
+    I2C3_PP_All4_Test10Hz();
+#elif I2C3_DIAG_MODE == I2C3_DIAG_MODE_HW_I2C_PROBE_LOOP
+    I2C3_HW_ProbeLoop();
+#endif
   /* USER CODE END 2 */
 
   /* Init scheduler */

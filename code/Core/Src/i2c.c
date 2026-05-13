@@ -234,25 +234,44 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
 
 /* USER CODE BEGIN 1 */
 
+/* ===================================================================
+ * I2C3/TXS0104E 信号完整性诊断函数
+ *
+ * 适用场景：
+ *   MCU (STM32L496) －－ TXS0104ERGYR －－ 传感器侧 (MAX30102 / ICM20948)
+ *
+ * 四根线全部经过 TXS0104E:
+ *   PC0 (I2C3_SCL)
+ *   PC1 (I2C3_SDA)
+ *   PC2 (PPG_INT)
+ *   PH1 (ICM_INT)
+ *
+ * 硬件注意：
+ *   TXS0104E 内部有约 10kΩ 上拉，外部不需要额外上拉。
+ *   测试前确认 TXS OE 引脚已使能、供电正常。
+ * =================================================================== */
+
 /**
-  * @brief  在 I2C3_SCL/SDA + ICM_INT + PPG_INT 上输出 10Hz 方波 (内部上拉)
-  * @note   用示波器测试信号完整性。复位或重新上电恢复 I2C3 功能。
+  * @brief  模式 2: 四线推挽 10Hz — 粗测 TXS 四通道是否通
+  * @note   PC0/PC1/PC2/PH1 同步 10Hz 方波。
+  *         该模式仅用于测试 MCU→TXS0104E→外部导线是否存在动态波形。
+  *         它不是 I2C 开漏通信测试。
+  *         PC2/PH1 正常是传感器 INT 输出，若传感器仍上电并驱动这些线，
+  *         推挽测试可能产生电平冲突，建议在传感器断电或未焊接时做。
   */
-void I2C3_Pins_Test10Hz(void)
+void I2C3_PP_All4_Test10Hz(void)
 {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
     __HAL_RCC_GPIOC_CLK_ENABLE();
     __HAL_RCC_GPIOH_CLK_ENABLE();
 
-    /* PC0(SCL), PC1(SDA), PC2(PPG_INT): 推挽输出 + 内部上拉 */
     GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_PULLUP;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-    /* PH1(ICM_INT): 推挽输出 + 内部上拉 */
     GPIO_InitStruct.Pin = GPIO_PIN_1;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_PULLUP;
@@ -263,10 +282,66 @@ void I2C3_Pins_Test10Hz(void)
         HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2, GPIO_PIN_SET);
         HAL_GPIO_WritePin(GPIOH, GPIO_PIN_1, GPIO_PIN_SET);
         HAL_Delay(50);
-
         HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2, GPIO_PIN_RESET);
         HAL_GPIO_WritePin(GPIOH, GPIO_PIN_1, GPIO_PIN_RESET);
         HAL_Delay(50);
+    }
+}
+
+/**
+  * @brief  模式 1: SCL/SDA 开漏 — 模拟 I2C 物理层拉低/释放
+  * @note   PC0(SCL) 10Hz, PC1(SDA) 5Hz, GPIO_MODE_OUTPUT_OD + PULLUP。
+  *         "高电平" = 释放(高阻)，依赖上拉回高。
+  *         TXS 外侧应看到对应 10/5Hz 波形。
+  *         若外侧无波形 → 检查 TXS OE/供电/焊接。
+  *         若上升沿很慢 → 上拉偏弱或线容偏大。
+  */
+void I2C3_OD_SclSda_Test10Hz(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    uint32_t t = 0;
+
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+
+    GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    /* SDA 初始释放高, SCL 初始释放高 */
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0 | GPIO_PIN_1, GPIO_PIN_SET);
+
+    while (1) {
+        t = HAL_GetTick();
+
+        /* SCL: 每 50ms 翻转 → 10Hz */
+        if ((t / 50) & 1)
+            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0, GPIO_PIN_RESET);  /* 拉低 */
+        else
+            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0, GPIO_PIN_SET);    /* 释放 */
+
+        /* SDA: 每 100ms 翻转 → 5Hz */
+        if ((t / 100) & 1)
+            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_RESET);
+        else
+            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_SET);
+    }
+}
+
+/**
+  * @brief  模式 3: 真实 I2C 探测循环 — 示波器观察 START/ADDR/ACK
+  * @note   交替探测 MAX30102 (0xAE) 和 ICM20948 (0xD0)，
+  *         使用 HAL_I2C_IsDeviceReady 产生真实 I2C 时序。
+  *         每秒两组: PPG @ 0ms, ICM @ 200ms, 下次 PPG @ 1000ms
+  */
+void I2C3_HW_ProbeLoop(void)
+{
+    while (1) {
+        HAL_I2C_IsDeviceReady(&hi2c3, 0xAE, 1, 20);   /* MAX30102 */
+        HAL_Delay(200);
+        HAL_I2C_IsDeviceReady(&hi2c3, 0xD0, 1, 20);   /* ICM20948 */
+        HAL_Delay(800);
     }
 }
 
