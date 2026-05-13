@@ -18,6 +18,7 @@
 #include "max3003.h"
 #include "max30102.h"
 #include "icm20948.h"
+#include "i2c.h"
 #include "usbd_cdc_if.h"
 #include "usbd_core.h"
 #include "ecg_record_control.h"
@@ -235,17 +236,32 @@ void StartTask_Sensor(void *argument)
   SD_DebugLog_WriteLine("MAX30003_INIT_DONE");
   Safe_USB_Printf("[SYS] MAX30003 init done\r\n");
 
-  Safe_USB_Printf("[SYS] Initializing MAX30102...\r\n");
-  MAX30102_Init();
-  SD_DebugLog_WriteLine("MAX30102_INIT_DONE");
-  Safe_USB_Printf("[SYS] MAX30102 init done\r\n");
-
-  Safe_USB_Printf("[SYS] Initializing ICM20948...\r\n");
-  if (ICM20948_Init() == 0) {
-      Safe_USB_Printf("[SYS] ICM20948 init done\r\n");
-  } else {
-      Safe_USB_Printf("[SYS] ICM20948 init FAILED\r\n");
+  /* I2C3 设备探测 (一次性) */
+  {
+      HAL_StatusTypeDef ppg = HAL_I2C_IsDeviceReady(&hi2c3, MAX30102_I2C_ADDR, 2, 50);
+      HAL_StatusTypeDef imu = HAL_I2C_IsDeviceReady(&hi2c3, ICM20948_ADDR_7BIT << 1, 2, 50);
+      SD_DebugLog_WriteEvent("I2C3_PROBE_PPG", (ppg == HAL_OK) ? 1 : 0);
+      SD_DebugLog_WriteEvent("I2C3_PROBE_IMU", (imu == HAL_OK) ? 1 : 0);
+      Safe_USB_Printf("[I2C3] PPG=%s IMU=%s\r\n",
+                      (ppg == HAL_OK) ? "OK" : "FAIL",
+                      (imu == HAL_OK) ? "OK" : "FAIL");
   }
+
+  /* MAX30102 初始化 (有限重试，失败不影响 ICM) */
+  SD_DebugLog_WriteLine("MAX30102_INIT_BEGIN");
+  MAX30102_InitResult_t ppg_ret = MAX30102_Init();
+  switch (ppg_ret) {
+      case MAX30102_INIT_OK:         SD_DebugLog_WriteLine("MAX30102_INIT_OK"); break;
+      case MAX30102_INIT_NOT_FOUND:  SD_DebugLog_WriteLine("MAX30102_INIT_NOT_FOUND"); break;
+      default:                       SD_DebugLog_WriteLine("MAX30102_INIT_CONFIG_FAILED"); break;
+  }
+  Safe_USB_Printf("[SYS] MAX30102 result=%d\r\n", ppg_ret);
+
+  /* ICM20948 初始化 (无论 MAX30102 结果如何都执行) */
+  SD_DebugLog_WriteLine("ICM20948_INIT_BEGIN");
+  uint8_t imu_ret = ICM20948_Init();
+  SD_DebugLog_WriteEvent("ICM20948_INIT_RESULT", imu_ret);
+  Safe_USB_Printf("[SYS] ICM20948 result=%d\r\n", imu_ret);
 
   /* 初始不采集 */
   ecg_streaming = 0;

@@ -3,10 +3,16 @@
 
 #include "main.h"
 
-// I2C 地址定义
-// ICM20948 7位地址: AD0=GND -> 0x68, AD0=VCC -> 0x69
+/*
+ * I2C 地址定义 (7-bit):
+ *   AD0=GND -> 0x68, AD0=VCC -> 0x69
+ *
+ * ICM20948_ADDR 是 7-bit 地址 (0x68)，
+ * Soft_I2C_WriteReg/ReadReg 内部会左移 1 位再传给 HAL。
+ * 不要传 0xD0，不要重复左移。
+ */
 #define ICM20948_ADDR_7BIT  0x68
-#define ICM20948_ADDR       ICM20948_ADDR_7BIT  // 传入 7-bit 地址，由底层 Soft_I2C_* 函数统一左移
+#define ICM20948_ADDR       ICM20948_ADDR_7BIT
 
 // 核心寄存器定义 (Bank 0)
 #define REG_BANK_SEL        0x7F
