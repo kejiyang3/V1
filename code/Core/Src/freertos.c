@@ -16,6 +16,8 @@
 #include "stm32l4xx_hal_uart.h"
 #include "app_lvgl.h"
 #include "max3003.h"
+#include "max30102.h"
+#include "icm20948.h"
 #include "usbd_cdc_if.h"
 #include "usbd_core.h"
 #include "ecg_record_control.h"
@@ -231,6 +233,19 @@ void StartTask_Sensor(void *argument)
   MAX30003_PollLeadStatus();
 
   SD_DebugLog_WriteLine("MAX30003_INIT_DONE");
+  Safe_USB_Printf("[SYS] MAX30003 init done\r\n");
+
+  Safe_USB_Printf("[SYS] Initializing MAX30102...\r\n");
+  MAX30102_Init();
+  SD_DebugLog_WriteLine("MAX30102_INIT_DONE");
+  Safe_USB_Printf("[SYS] MAX30102 init done\r\n");
+
+  Safe_USB_Printf("[SYS] Initializing ICM20948...\r\n");
+  if (ICM20948_Init() == 0) {
+      Safe_USB_Printf("[SYS] ICM20948 init done\r\n");
+  } else {
+      Safe_USB_Printf("[SYS] ICM20948 init FAILED\r\n");
+  }
 
   /* 初始不采集 */
   ecg_streaming = 0;

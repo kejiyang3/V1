@@ -1,5 +1,6 @@
 #include "icm20948.h"
 #include "gpio.h"
+#include "usb_printf.h"
 extern void Safe_USB_Printf(const char *format, ...);
 
 IMU_Data_t imu_data = {0};
@@ -47,10 +48,12 @@ uint8_t ICM20948_Init(void) {
 
     ICM_SelectBank(0);
     uint8_t who_am_i = Soft_I2C_ReadReg(ICM20948_ADDR, REG_WHO_AM_I);
+    usb_printf("[ICM] WHO_AM_I = 0x%02X (expected 0xEA)\r\n", who_am_i);
     if (who_am_i != 0xEA) {
-        /* WHO_AM_I mismatch → likely I2C address error or chip not connected */
+        usb_printf("[ICM] ERROR: WHO_AM_I mismatch, sensor not responding\r\n");
         return 1;
     }
+    usb_printf("[ICM] Device detected OK\r\n");
 
     // 1. 唤醒并复位
     Soft_I2C_WriteReg(ICM20948_ADDR, REG_PWR_MGMT_1, 0x80); 

@@ -4,6 +4,7 @@
 #include "usb_printf.h"
 #include "app_log.h"
 #include "ecg_record_control.h"
+#include "sd_debug_log.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -166,7 +167,12 @@ void MAX30003_Init(void)
 
     APP_USB_LOG("[MAX30003] INFO=0x%06lX\r\n", info1);
 
-    /* CNFG_GEN: ECG + DC Lead-Off 永久启用 (10nA, ±300mV) */
+    /* CNFG_ECG: 先配好采样率/增益/滤波，再开 CNFG_GEN */
+    if (!MAX30003_WriteVerify(MAX30003_CNFG_ECG,
+                              MAX30003_CNFG_ECG_NORMAL,
+                              "CNFG_ECG")) return;
+
+    /* CNFG_GEN: 一次性写入 EN_ECG + EN_RBIAS + DCLOFF (0x081217) */
     if (!MAX30003_WriteVerify(MAX30003_CNFG_GEN,
                               MAX30003_CNFG_GEN_NORMAL,
                               "CNFG_GEN")) return;
@@ -188,10 +194,6 @@ void MAX30003_Init(void)
                               0x000000,
                               "CNFG_EMUX")) return;
 #endif
-
-    if (!MAX30003_WriteVerify(MAX30003_CNFG_ECG,
-                              MAX30003_CNFG_ECG_NORMAL,
-                              "CNFG_ECG")) return;
 
     /* Auto Fast Recovery: 双电极运动场景快速恢复 */
     if (!MAX30003_WriteVerify(MAX30003_MNGR_DYN,
@@ -221,6 +223,19 @@ void MAX30003_Init(void)
 
     MAX30003_ReadReg(MAX30003_STATUS, &dummy);
     APP_USB_LOG("[MAX30003] Init done. STATUS=0x%06lX\r\n", dummy);
+
+    /* 一次性读回关键寄存器到 SD debug_log */
+    {
+        uint32_t gen = 0, emux = 0, ecg = 0, status = 0;
+        MAX30003_ReadReg(MAX30003_CNFG_GEN, &gen);
+        MAX30003_ReadReg(MAX30003_CNFG_EMUX, &emux);
+        MAX30003_ReadReg(MAX30003_CNFG_ECG, &ecg);
+        MAX30003_ReadReg(MAX30003_STATUS, &status);
+        SD_DebugLog_WriteEvent("INIT_GEN", gen);
+        SD_DebugLog_WriteEvent("INIT_EMUX", emux);
+        SD_DebugLog_WriteEvent("INIT_ECG", ecg);
+        SD_DebugLog_WriteEvent("INIT_STATUS", status);
+    }
 }
 
 /**

@@ -87,6 +87,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/User/touch.c
     ${CMAKE_SOURCE_DIR}/User/Config/usb_printf.c
     ${CMAKE_SOURCE_DIR}/Core/Src/max3003.c
+    ${CMAKE_SOURCE_DIR}/Core/Src/Max30102.c
+    ${CMAKE_SOURCE_DIR}/Core/Src/icm20948.c
     ${CMAKE_SOURCE_DIR}/Core/Src/ecg_record_control.c
     ${CMAKE_SOURCE_DIR}/Core/Src/ecg_sd_logger.c
     ${CMAKE_SOURCE_DIR}/Core/Src/ecg_usb_dump.c

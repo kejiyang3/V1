@@ -38,6 +38,19 @@ def notch_filter_50hz(data, fs):
         return data
 
 
+def remove_baseline_wander(data, fs):
+    """去除基线漂移 (0.5Hz 高通, 零相位)"""
+    if not _scipy_available:
+        return data
+    if fs <= 0:
+        return data
+    try:
+        b, a = scipy_signal.butter(3, 0.5, btype='high', fs=fs)
+        return scipy_signal.filtfilt(b, a, data)
+    except Exception:
+        return data
+
+
 def lowpass_40hz(data, fs):
     """40Hz Butterworth 低通滤波 (5阶, 零相位)"""
     if not _scipy_available:
@@ -49,6 +62,9 @@ def lowpass_40hz(data, fs):
         return scipy_signal.filtfilt(b, a, data)
     except Exception:
         return data
+
+
+TRIM_SEC = 5.0   # 切除前 5 秒 (初始稳定期)
 
 
 def read_csv(filepath):
@@ -190,43 +206,44 @@ def plot_signal(signal, fs, stats, meta, out_path):
     t_total = n / fs if fs > 0 else 0
     t = np.arange(n) / fs
 
-    # 50Hz 陷波 + 40Hz 低通
+    # 50Hz 陷波 + 40Hz 低通 + 去基线漂移
     sig_notch = notch_filter_50hz(signal, fs)
-    sig_filtered = lowpass_40hz(sig_notch, fs)
+    sig_lp = lowpass_40hz(sig_notch, fs)
+    sig_filtered = remove_baseline_wander(sig_lp, fs)
+
+    # 导出滤波后 CSV
+    csv_fname = os.path.basename(out_path).replace("_plot.png", "_filtered.csv")
+    csv_path = os.path.join(os.path.dirname(out_path), csv_fname)
+    df_out = pd.DataFrame({
+        "time_sec": np.round(t, 4),
+        "ecg_raw": signal.astype(np.int16),
+        "ecg_filtered": np.round(sig_filtered, 1)
+    })
+    df_out.to_csv(csv_path, index=False)
+    print(f"    滤波CSV: {csv_path}")
+
+    win_10s = min(int(fs * 10), n)
 
     fig, axes = plt.subplots(3, 1, figsize=(14, 10))
 
-    # ---- 子图1: 前 10 秒时域 (raw + filtered 叠加) ----
-    win_10s = min(int(fs * 10), n)
+    # ---- 子图1: 原始信号 (前10秒) ----
     ax = axes[0]
-    ax.plot(t[:win_10s], signal[:win_10s], linewidth=0.7, color="#1f77b4", alpha=0.5, label="Raw")
-    if sig_filtered is not signal:
-        ax.plot(t[:win_10s], sig_filtered[:win_10s], linewidth=0.7, color="#d62728", label="50Hz Notch")
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("ECG")
-    ax.set_title(f"Time Domain (first {win_10s/fs:.1f}s)")
-    ax.legend(fontsize=8)
+    ax.plot(t[:win_10s], signal[:win_10s], linewidth=0.6, color="#1f77b4")
+    ax.set_ylabel("ECG raw")
+    ax.set_title(f"Raw Signal (first {win_10s/fs:.1f}s)")
+    ax.set_ylim(-1000, 1000)
     ax.grid(True, alpha=0.3)
 
-    # ---- 子图2: 完整信号概览 + 滤波对比 ----
+    # ---- 子图2: 滤波 + 去基线后 (前10秒) ----
     ax = axes[1]
-    if n > 50000:
-        step = max(1, n // 20000)
-        t_ds = t[::step]
-        ax.plot(t_ds, signal[::step], linewidth=0.5, color="#1f77b4", alpha=0.4, label="Raw")
-        if sig_filtered is not signal:
-            ax.plot(t_ds, sig_filtered[::step], linewidth=0.5, color="#d62728", alpha=0.7, label="Filtered")
-    else:
-        ax.plot(t, signal, linewidth=0.4, color="#1f77b4", alpha=0.4, label="Raw")
-        if sig_filtered is not signal:
-            ax.plot(t, sig_filtered, linewidth=0.5, color="#d62728", alpha=0.7, label="Filtered")
+    ax.plot(t[:win_10s], sig_filtered[:win_10s], linewidth=0.8, color="#d62728")
     ax.set_xlabel("Time (s)")
-    ax.set_ylabel("ECG")
-    ax.set_title(f"Full Signal ({n} samples, {t_total:.0f}s)")
-    ax.legend(fontsize=8)
+    ax.set_ylabel("ECG filtered")
+    ax.set_title(f"Filtered + Baseline Removed (first {win_10s/fs:.1f}s)")
+    ax.set_ylim(-1000, 1000)
     ax.grid(True, alpha=0.3)
 
-    # ---- 子图3: 频谱 (raw + filtered 对比) ----
+    # ---- 子图3: 频谱 (raw vs filtered) ----
     if fs > 10 and n > 200:
         windowed = signal * np.hanning(n)
         fft_mag = np.abs(np.fft.rfft(windowed)) / n
@@ -278,7 +295,17 @@ def process_one(fpath, out_dir):
         return None
 
     fs = meta["fs"]
-    print(f"  分析: {meta['file']}  ({meta['samples']} samples @ {fs} Hz)")
+
+    # 切除前 TRIM_SEC 秒 (初始稳定期)
+    trim_samples = int(fs * TRIM_SEC)
+    if len(ecg) > trim_samples:
+        ecg = ecg[trim_samples:]
+        if seq is not None and len(seq) > trim_samples:
+            seq = seq[trim_samples:]
+        meta["samples"] = len(ecg)
+        print(f"  分析: {meta['file']}  ({meta['samples']} samples @ {fs} Hz, trimmed {TRIM_SEC}s)")
+    else:
+        print(f"  分析: {meta['file']}  ({meta['samples']} samples @ {fs} Hz)")
 
     stats = analyze(ecg, fs, seq)
 

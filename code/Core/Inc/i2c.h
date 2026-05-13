@@ -45,6 +45,7 @@ void MX_I2C3_Init(void);
 
 /* USER CODE BEGIN Prototypes */
 
+
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus

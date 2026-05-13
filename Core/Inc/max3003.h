@@ -84,22 +84,28 @@ extern "C" {
 #define CNFG_GEN_RBIASV_100M        (1UL << 2)
 #define CNFG_GEN_RBIASP_EN          (1UL << 1)
 #define CNFG_GEN_RBIASN_EN          (1UL << 0)
-/* 正常配置: ECG + DC Lead-Off 永久启用 (10nA, ±300mV) */
-#define MAX30003_CNFG_GEN_NORMAL (CNFG_GEN_EN_ECG | CNFG_GEN_FMSTR_32K | \
-                                  CNFG_GEN_EN_DCLOFF_ECGPN | \
-                                  CNFG_GEN_DCLOFF_IPOL_PU_ND | \
-                                  CNFG_GEN_DCLOFF_IMAG_10NA | \
-                                  CNFG_GEN_DCLOFF_VTH_300MV | \
-                                  CNFG_GEN_EN_RBIAS_EN | CNFG_GEN_RBIASV_100M | \
-                                  CNFG_GEN_RBIASP_EN | CNFG_GEN_RBIASN_EN)
+/*
+ * CNFG_GEN normal ECG configuration:
+ * EN_ECG      = 1         -> 0x080000
+ * EN_DCLOFF   = 01        -> 0x001000  DC lead-off on ECGP/ECGN
+ * DCLOFF_IMAG = 010, 10nA -> 0x000200
+ * DCLOFF_VTH  = 00,±300mV -> 0x000000
+ * EN_RBIAS    = 01        -> 0x000010  ECG resistive bias enabled
+ * RBIASV      = 01,100MΩ  -> 0x000004
+ * RBIASP      = 1         -> 0x000002
+ * RBIASN      = 1         -> 0x000001
+ *                       sum = 0x081217
+ * IMPORTANT: EN_ECG and EN_RBIAS must be written in the same SPI write.
+ */
+#define MAX30003_CNFG_GEN_NORMAL  (0x081217UL)
 
 /* ========== CNFG_ECG 位域 ========== */
-/* RATE=00 (512 SPS), GAIN=00 (20x), DHPF=1 (0.5Hz), DLPF=01 (40Hz) 抗50Hz工频 */
+/* RATE=00 (512 SPS), GAIN=10 (80x), DHPF=1 (0.5Hz), DLPF=01 (40Hz) */
 #define CNFG_ECG_RATE_512SPS    (0UL << 22)
-#define CNFG_ECG_GAIN_40X       (1UL << 16)
+#define CNFG_ECG_GAIN_80X       (2UL << 16)
 #define CNFG_ECG_DHPF_0_5HZ     (1UL << 14)
 #define CNFG_ECG_DLPF_40HZ      (1UL << 12)
-#define MAX30003_CNFG_ECG_NORMAL (CNFG_ECG_RATE_512SPS | CNFG_ECG_GAIN_40X | \
+#define MAX30003_CNFG_ECG_NORMAL (CNFG_ECG_RATE_512SPS | CNFG_ECG_GAIN_80X | \
                                   CNFG_ECG_DHPF_0_5HZ | CNFG_ECG_DLPF_40HZ)
 
 /* ========== MNGR_DYN 配置 ========== */

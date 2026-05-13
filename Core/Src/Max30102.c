@@ -9,7 +9,7 @@ extern I2C_HandleTypeDef hi2c3;
 
 volatile uint8_t max30102_int_flag = 0; // MAX30102 中断标志位（INT 低电平触发)
 
-/**
+/** 
   * @brief  检测 MAX30102 是否在线
   * @note   这里保留你的实现方式：用 7-bit 地址左移 1 位探测
   *         若你的 MAX30102_WRITE_ADDR/MAX30102_READ_ADDR 已经是 (addr<<1) 形式，
@@ -19,12 +19,12 @@ ErrorStatus MAX30102_CheckDevice(void)
 {
     if (HAL_I2C_IsDeviceReady(&hi2c3, (MAX30102_SLAVE_ADDR << 1), 1, HAL_MAX_DELAY) == HAL_OK)
     {
-        printf("MAX30102ConnetSucess\r\n");
+        usb_printf("MAX30102ConnetSucess\r\n");
         return SUCCESS;
     }
     else
     {
-        printf("MAX30102ConnetFiled\r\n");
+        usb_printf("MAX30102ConnetFiled\r\n");
         return ERROR;
     }
 }
@@ -40,7 +40,7 @@ ErrorStatus MAX30102_WriteByte(uint8_t reg, uint8_t data)
     }
     else
     {
-        printf("MAX30102writeReg0x%02XFiled\r\n", reg);
+        usb_printf("MAX30102writeReg0x%02XFiled\r\n", reg);
         return ERROR;
     }
 }
@@ -56,7 +56,7 @@ ErrorStatus MAX30102_WriteBuffer(uint8_t reg, uint8_t *buffer, uint16_t len)
     }
     else
     {
-        printf("MAX30102 MutiByteWriteFiled\r\n");
+        usb_printf("MAX30102 MutiByteWriteFiled\r\n");
         return ERROR;
     }
 }
@@ -72,7 +72,7 @@ ErrorStatus MAX30102_ReadBuffer(uint8_t addr, uint8_t *rbuffer, uint16_t len)
     }
     else
     {
-        printf("MAX30102 MutiByteReadFiled\r\n");
+        usb_printf("MAX30102 MutiByteReadFiled\r\n");
         return ERROR;
     }
 }
