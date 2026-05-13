@@ -234,6 +234,13 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
 
 /* USER CODE BEGIN 1 */
 
+#include "max30102.h"
+#include "icm20948.h"
+#include "sd_debug_log.h"
+#include "usb_printf.h"
+
+extern void Safe_USB_Printf(const char *format, ...);
+
 /* ===================================================================
  * I2C3/TXS0104E 信号完整性诊断函数
  *
@@ -330,18 +337,30 @@ void I2C3_OD_SclSda_Test10Hz(void)
 }
 
 /**
-  * @brief  模式 3: 真实 I2C 探测循环 — 示波器观察 START/ADDR/ACK
-  * @note   交替探测 MAX30102 (0xAE) 和 ICM20948 (0xD0)，
-  *         使用 HAL_I2C_IsDeviceReady 产生真实 I2C 时序。
-  *         每秒两组: PPG @ 0ms, ICM @ 200ms, 下次 PPG @ 1000ms
+  * @brief  模式 3: 直接 I2C3 初始化 MAX30102 + ICM20948
+  * @note   循环调用两个传感器的真实初始化函数，
+  *         产生 I2C START/寄存器地址/数据/STOP/ACK 时序。
+  *         使用 SD debug_log 记录每次初始化结果。
   */
 void I2C3_HW_ProbeLoop(void)
 {
     while (1) {
-        HAL_I2C_IsDeviceReady(&hi2c3, 0xAE, 1, 20);   /* MAX30102 */
-        HAL_Delay(200);
-        HAL_I2C_IsDeviceReady(&hi2c3, 0xD0, 1, 20);   /* ICM20948 */
-        HAL_Delay(800);
+        Safe_USB_Printf("\r\n[PROBE] === I2C3 Probe Cycle ===\r\n");
+
+        /* MAX30102 初始化 */
+        Safe_USB_Printf("[PROBE] MAX30102_Init...\r\n");
+        MAX30102_InitResult_t ppg = MAX30102_Init();
+        Safe_USB_Printf("[PROBE] MAX30102 result=%d\r\n", ppg);
+        SD_DebugLog_WriteEvent("PPG_INIT", (uint32_t)ppg);
+
+        /* ICM20948 初始化 */
+        Safe_USB_Printf("[PROBE] ICM20948_Init...\r\n");
+        uint8_t imu = ICM20948_Init();
+        Safe_USB_Printf("[PROBE] ICM20948 result=%d\r\n", imu);
+        SD_DebugLog_WriteEvent("IMU_INIT", (uint32_t)imu);
+
+        Safe_USB_Printf("[PROBE] Cycle complete, wait 1s...\r\n");
+        HAL_Delay(1000);
     }
 }
 

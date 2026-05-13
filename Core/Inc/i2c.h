@@ -42,7 +42,7 @@ extern I2C_HandleTypeDef hi2c3;
 #define I2C3_DIAG_MODE_HW_I2C_PROBE_LOOP  3   /* 真实 I2C 探测, 测 START/ACK */
 
 #ifndef I2C3_DIAG_MODE
-#define I2C3_DIAG_MODE I2C3_DIAG_MODE_NORMAL
+#define I2C3_DIAG_MODE I2C3_DIAG_MODE_HW_I2C_PROBE_LOOP
 #endif
 
 /* USER CODE END Private defines */

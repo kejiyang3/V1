@@ -23,6 +23,7 @@
 #include "usbd_cdc_if.h"
 #include "max3003.h"
 #include "ecg_record_control.h"
+#include "usb_device.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -123,6 +124,8 @@ int main(void)
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
   ECG_FCLK_MCO_ForceInit();
+
+  MX_USB_DEVICE_Init();
 
   /* I2C3 诊断模式分流 (均 while(1), 不会返回) */
 #if I2C3_DIAG_MODE == I2C3_DIAG_MODE_OD_SCL_SDA_10HZ
