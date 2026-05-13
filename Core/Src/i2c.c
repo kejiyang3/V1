@@ -234,4 +234,40 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
 
 /* USER CODE BEGIN 1 */
 
+/**
+  * @brief  在 I2C3_SCL/SDA + ICM_INT + PPG_INT 上输出 10Hz 方波 (内部上拉)
+  * @note   用示波器测试信号完整性。复位或重新上电恢复 I2C3 功能。
+  */
+void I2C3_Pins_Test10Hz(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_GPIOH_CLK_ENABLE();
+
+    /* PC0(SCL), PC1(SDA), PC2(PPG_INT): 推挽输出 + 内部上拉 */
+    GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    /* PH1(ICM_INT): 推挽输出 + 内部上拉 */
+    GPIO_InitStruct.Pin = GPIO_PIN_1;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOH, &GPIO_InitStruct);
+
+    while (1) {
+        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(GPIOH, GPIO_PIN_1, GPIO_PIN_SET);
+        HAL_Delay(50);
+
+        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOH, GPIO_PIN_1, GPIO_PIN_RESET);
+        HAL_Delay(50);
+    }
+}
+
 /* USER CODE END 1 */

@@ -45,6 +45,7 @@ void MX_I2C3_Init(void);
 
 /* USER CODE BEGIN Prototypes */
 
+void I2C3_Pins_Test10Hz(void);
 
 /* USER CODE END Prototypes */
 
