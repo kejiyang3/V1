@@ -268,18 +268,26 @@ void StartTask_Sensor(void *argument)
   else
       Safe_USB_Printf("[MAX30102] UNKNOWN INIT RESULT=%d\r\n", (int)ppg_ret);
 
-  if (icm_ret == 0)
-      Safe_USB_Printf("[ICM20948] I2C CALL OK, WHO_AM_I OK, INIT OK\r\n");
-  else
-      Safe_USB_Printf("[ICM20948] I2C CALL FAIL OR WHO_AM_I MISMATCH, RET=%u\r\n", (unsigned int)icm_ret);
+  if (icm_ret == 0) {
+      Safe_USB_Printf("[ICM20948] INIT OK (WHO_AM_I + 10x probe passed)\r\n");
+  } else {
+      Safe_USB_Printf("[ICM20948] INIT FAILED, RET=%u"
+                      " (1=WHO_AM_I,2=PWR,3=Bank2,4=INT_CFG,5=VerifyRd,6=VerifyVal,7=10xWHO)\r\n",
+                      (unsigned int)icm_ret);
+  }
   Safe_USB_Printf("[/SENSOR_INIT]\r\n");
 
   if (ppg_ret == MAX30102_INIT_OK)          SD_DebugLog_WriteLine("MAX30102_INIT_OK");
   else if (ppg_ret == MAX30102_INIT_NOT_FOUND) SD_DebugLog_WriteLine("MAX30102_INIT_NOT_FOUND");
   else                                       SD_DebugLog_WriteLine("MAX30102_INIT_CONFIG_FAILED");
 
-  if (icm_ret == 0) SD_DebugLog_WriteLine("ICM20948_INIT_OK");
-  else              SD_DebugLog_WriteLine("ICM20948_INIT_FAILED");
+  if (icm_ret == 0) {
+      SD_DebugLog_WriteLine("ICM20948_INIT_OK");
+  } else {
+      char icm_err[32];
+      snprintf(icm_err, sizeof(icm_err), "ICM20948_INIT_FAILED,RET=%u", (unsigned int)icm_ret);
+      SD_DebugLog_WriteLine(icm_err);
+  }
 
   /* ICM20948 中断链路自检 — 仅在 ICM 初始化成功后执行一次 */
   if (icm_ret == 0) {
@@ -507,7 +515,7 @@ void StartTask_BLE(void *argument)
   */
 static void APP_ICM20948_InterruptSelfTest(void)
 {
-    char line[192];
+    char line[256];
     int16_t ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0;
 
     uint32_t irq0, irq1, irq2, irq3;
@@ -516,25 +524,35 @@ static void APP_ICM20948_InterruptSelfTest(void)
     uint8_t raw_ret;
     GPIO_PinState pin_before, pin_after_wait1, pin_after_read, pin_after_wait2;
 
+    HAL_StatusTypeDef s_who, s_pwr1, s_pwr2, s_cfg, s_en1, s_st0;
+    HAL_StatusTypeDef s_st1, s_st2, s_st3;
+
     extern volatile uint32_t icm_irq_count;
+
+#define RD_TAG(s)  (((s) == HAL_OK) ? "RD_OK" : "RD_FAIL")
 
     SD_DebugLog_WriteLine("ICM_IRQ_SELFTEST_BEGIN");
     Safe_USB_Printf("\r\n[ICM_IRQ_SELFTEST_BEGIN]\r\n");
 
-    /* T0: 初始读回全部关键寄存器 + PH1 电平 + IRQ 计数 */
-    whoami         = ICM20948_ReadBank0Reg_Debug(0x00);
-    pwr1           = ICM20948_ReadBank0Reg_Debug(0x06);
-    pwr2           = ICM20948_ReadBank0Reg_Debug(0x07);
-    pin_cfg_before = ICM20948_ReadBank0Reg_Debug(0x0F);
-    int_en1_before = ICM20948_ReadBank0Reg_Debug(0x11);
-    st_before      = ICM20948_ReadBank0Reg_Debug(0x1A);
-    pin_before     = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
-    irq0           = icm_irq_count;
+    /* T0: 初始读回全部关键寄存器 (checked) + PH1 电平 + IRQ 计数 */
+    s_who  = ICM20948_ReadBank0Reg_Checked(0x00, &whoami);
+    s_pwr1 = ICM20948_ReadBank0Reg_Checked(0x06, &pwr1);
+    s_pwr2 = ICM20948_ReadBank0Reg_Checked(0x07, &pwr2);
+    s_cfg  = ICM20948_ReadBank0Reg_Checked(0x0F, &pin_cfg_before);
+    s_en1  = ICM20948_ReadBank0Reg_Checked(0x11, &int_en1_before);
+    s_st0  = ICM20948_ReadBank0Reg_Checked(0x1A, &st_before);
+    pin_before = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
+    irq0       = icm_irq_count;
 
     snprintf(line, sizeof(line),
-             "ICM_T0,WHO=0x%02X,PWR1=0x%02X,PWR2=0x%02X,CFG=0x%02X,EN1=0x%02X,ST1=0x%02X,PIN=%u,IRQ=%lu",
-             whoami, pwr1, pwr2, pin_cfg_before, int_en1_before,
-             st_before, (unsigned)pin_before, (unsigned long)irq0);
+             "ICM_T0,WHO=0x%02X(%s),PWR1=0x%02X(%s),PWR2=0x%02X(%s),CFG=0x%02X(%s),EN1=0x%02X(%s),ST1=0x%02X(%s),PIN=%u,IRQ=%lu",
+             whoami, RD_TAG(s_who),
+             pwr1, RD_TAG(s_pwr1),
+             pwr2, RD_TAG(s_pwr2),
+             pin_cfg_before, RD_TAG(s_cfg),
+             int_en1_before, RD_TAG(s_en1),
+             st_before, RD_TAG(s_st0),
+             (unsigned)pin_before, (unsigned long)irq0);
     SD_DebugLog_WriteLine(line);
     Safe_USB_Printf("%s\r\n", line);
 
@@ -543,41 +561,51 @@ static void APP_ICM20948_InterruptSelfTest(void)
     ICM20948_EnableLatchedDataReadyInterrupt_Debug();
     osDelay(120);
 
-    st_after_wait1  = ICM20948_ReadBank0Reg_Debug(0x1A);
+    s_st1          = ICM20948_ReadBank0Reg_Checked(0x1A, &st_after_wait1);
     pin_after_wait1 = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
     irq1            = icm_irq_count;
 
     snprintf(line, sizeof(line),
-             "ICM_T1_AFTER_120MS,ST1=0x%02X,PIN=%u,IRQ=%lu",
-             st_after_wait1, (unsigned)pin_after_wait1, (unsigned long)irq1);
+             "ICM_T1_AFTER_120MS,ST1=0x%02X(%s),PIN=%u,IRQ=%lu",
+             st_after_wait1, RD_TAG(s_st1),
+             (unsigned)pin_after_wait1, (unsigned long)irq1);
     SD_DebugLog_WriteLine(line);
     Safe_USB_Printf("%s\r\n", line);
 
     /* T2: 读一次六轴原始数据 (ReadAccelGyroRaw 末尾会 ClearInterruptStatus) */
     raw_ret = ICM20948_ReadAccelGyroRaw(&ax, &ay, &az, &gx, &gy, &gz);
 
-    st_after_read  = ICM20948_ReadBank0Reg_Debug(0x1A);
+    s_st2          = ICM20948_ReadBank0Reg_Checked(0x1A, &st_after_read);
     pin_after_read = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
     irq2           = icm_irq_count;
 
-    snprintf(line, sizeof(line),
-             "ICM_T2_AFTER_READ,RET=%u,AX=%d,AY=%d,AZ=%d,GX=%d,GY=%d,GZ=%d,ST1=0x%02X,PIN=%u,IRQ=%lu",
-             (unsigned)raw_ret,
-             ax, ay, az, gx, gy, gz,
-             st_after_read, (unsigned)pin_after_read, (unsigned long)irq2);
+    if (raw_ret == 0) {
+        snprintf(line, sizeof(line),
+                 "ICM_T2_AFTER_READ,RET=0,AX=%d,AY=%d,AZ=%d,GX=%d,GY=%d,GZ=%d,ST1=0x%02X(%s),PIN=%u,IRQ=%lu",
+                 ax, ay, az, gx, gy, gz,
+                 st_after_read, RD_TAG(s_st2),
+                 (unsigned)pin_after_read, (unsigned long)irq2);
+    } else {
+        snprintf(line, sizeof(line),
+                 "ICM_T2_AFTER_READ,RET=%u,AX=NA,AY=NA,AZ=NA,GX=NA,GY=NA,GZ=NA,ST1=0x%02X(%s),PIN=%u,IRQ=%lu",
+                 (unsigned)raw_ret,
+                 st_after_read, RD_TAG(s_st2),
+                 (unsigned)pin_after_read, (unsigned long)irq2);
+    }
     SD_DebugLog_WriteLine(line);
     Safe_USB_Printf("%s\r\n", line);
 
     /* T3: 读完后再等 120ms，看 latched 模式是否再次产生中断 */
     osDelay(120);
 
-    st_after_wait2  = ICM20948_ReadBank0Reg_Debug(0x1A);
+    s_st3           = ICM20948_ReadBank0Reg_Checked(0x1A, &st_after_wait2);
     pin_after_wait2 = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
     irq3            = icm_irq_count;
 
     snprintf(line, sizeof(line),
-             "ICM_T3_SECOND_120MS,ST1=0x%02X,PIN=%u,IRQ=%lu",
-             st_after_wait2, (unsigned)pin_after_wait2, (unsigned long)irq3);
+             "ICM_T3_SECOND_120MS,ST1=0x%02X(%s),PIN=%u,IRQ=%lu",
+             st_after_wait2, RD_TAG(s_st3),
+             (unsigned)pin_after_wait2, (unsigned long)irq3);
     SD_DebugLog_WriteLine(line);
     Safe_USB_Printf("%s\r\n", line);
 
@@ -587,6 +615,8 @@ static void APP_ICM20948_InterruptSelfTest(void)
 
     SD_DebugLog_WriteLine("ICM_IRQ_SELFTEST_END");
     Safe_USB_Printf("[ICM_IRQ_SELFTEST_END]\r\n");
+
+#undef RD_TAG
 }
 
 /**
