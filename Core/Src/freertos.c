@@ -145,7 +145,7 @@ const osMutexAttr_t Mtx_SDCard_attributes = {
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 void Safe_USB_Printf(const char *format, ...);
-static void APP_ICM20948_InterruptSelfTest(void);
+static void APP_ICM20948_IntFlagAndPinLevelCheck(void);
 /* USER CODE END FunctionPrototypes */
 
 void StartTask_LVGL(void *argument);
@@ -289,9 +289,9 @@ void StartTask_Sensor(void *argument)
       SD_DebugLog_WriteLine(icm_err);
   }
 
-  /* ICM20948 中断链路自检 — 仅在 ICM 初始化成功后执行一次 */
+  /* ICM20948 中断标志+引脚电平验证 — 仅在 ICM 初始化成功后执行一次 */
   if (icm_ret == 0) {
-      APP_ICM20948_InterruptSelfTest();
+      APP_ICM20948_IntFlagAndPinLevelCheck();
   }
 
   /* ECG 初始化照旧，不受 PPG/ICM 影响 */
@@ -509,114 +509,91 @@ void StartTask_BLE(void *argument)
 /* USER CODE BEGIN Application */
 
 /**
-  * @brief  ICM20948 中断链路自检 — latched mode, 仅在开机时执行一次
-  * @note   使用锁存中断模式 (INT_PIN_CFG=0xE0) 避免 50µs 窄脉冲不可见。
-  *         结果同时输出到 SD debug_log 和 USB CDC (一次性)。
+  * @brief  ICM20948 中断标志+引脚电平最小验证 — PIN→ST1→PIN 顺序读
+  * @note   在锁存模式下先读 PH1 电平再读 INT_STATUS_1 再读 PH1 电平，
+  *         避免读状态寄存器意外清除锁存中断后引脚恢复高。
+  *         结果输出到 SD debug_log 和 USB CDC (一次性)。
   */
-static void APP_ICM20948_InterruptSelfTest(void)
+static void APP_ICM20948_IntFlagAndPinLevelCheck(void)
 {
-    char line[256];
-    int16_t ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0;
+    char line[192];
 
-    uint32_t irq0, irq1, irq2, irq3;
-    uint8_t whoami, pwr1, pwr2, pin_cfg_before, int_en1_before;
-    uint8_t st_before, st_after_wait1, st_after_read, st_after_wait2;
-    uint8_t raw_ret;
-    GPIO_PinState pin_before, pin_after_wait1, pin_after_read, pin_after_wait2;
+    uint8_t cfg_after_enable = 0;
+    uint8_t en1_after_enable = 0;
 
-    HAL_StatusTypeDef s_who, s_pwr1, s_pwr2, s_cfg, s_en1, s_st0;
-    HAL_StatusTypeDef s_st1, s_st2, s_st3;
+    GPIO_PinState pin_before_wait;
+    GPIO_PinState pin_before_st1;
+    GPIO_PinState pin_after_st1;
+
+    uint8_t st1 = 0;
+
+    uint32_t irq_before = 0;
+    uint32_t irq_after = 0;
 
     extern volatile uint32_t icm_irq_count;
 
-#define RD_TAG(s)  (((s) == HAL_OK) ? "RD_OK" : "RD_FAIL")
+    SD_DebugLog_WriteLine("ICM_INT_FLAG_PIN_CHECK_BEGIN");
+    Safe_USB_Printf("\r\n[ICM_INT_FLAG_PIN_CHECK_BEGIN]\r\n");
 
-    SD_DebugLog_WriteLine("ICM_IRQ_SELFTEST_BEGIN");
-    Safe_USB_Printf("\r\n[ICM_IRQ_SELFTEST_BEGIN]\r\n");
-
-    /* T0: 初始读回全部关键寄存器 (checked) + PH1 电平 + IRQ 计数 */
-    s_who  = ICM20948_ReadBank0Reg_Checked(0x00, &whoami);
-    s_pwr1 = ICM20948_ReadBank0Reg_Checked(0x06, &pwr1);
-    s_pwr2 = ICM20948_ReadBank0Reg_Checked(0x07, &pwr2);
-    s_cfg  = ICM20948_ReadBank0Reg_Checked(0x0F, &pin_cfg_before);
-    s_en1  = ICM20948_ReadBank0Reg_Checked(0x11, &int_en1_before);
-    s_st0  = ICM20948_ReadBank0Reg_Checked(0x1A, &st_before);
-    pin_before = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
-    irq0       = icm_irq_count;
-
-    snprintf(line, sizeof(line),
-             "ICM_T0,WHO=0x%02X(%s),PWR1=0x%02X(%s),PWR2=0x%02X(%s),CFG=0x%02X(%s),EN1=0x%02X(%s),ST1=0x%02X(%s),PIN=%u,IRQ=%lu",
-             whoami, RD_TAG(s_who),
-             pwr1, RD_TAG(s_pwr1),
-             pwr2, RD_TAG(s_pwr2),
-             pin_cfg_before, RD_TAG(s_cfg),
-             int_en1_before, RD_TAG(s_en1),
-             st_before, RD_TAG(s_st0),
-             (unsigned)pin_before, (unsigned long)irq0);
-    SD_DebugLog_WriteLine(line);
-    Safe_USB_Printf("%s\r\n", line);
-
-    /* T1: 清旧状态，开启锁存 Data Ready 中断，等待 120ms */
+    /* 1. 关闭旧中断并清旧状态 */
+    ICM20948_DisableDataReadyInterrupt();
     ICM20948_ClearInterruptStatus();
+    osDelay(20);
+
+    /* 2. 开启锁存式 Data Ready 中断 */
     ICM20948_EnableLatchedDataReadyInterrupt_Debug();
-    osDelay(120);
+    osDelay(5);
 
-    s_st1          = ICM20948_ReadBank0Reg_Checked(0x1A, &st_after_wait1);
-    pin_after_wait1 = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
-    irq1            = icm_irq_count;
-
-    snprintf(line, sizeof(line),
-             "ICM_T1_AFTER_120MS,ST1=0x%02X(%s),PIN=%u,IRQ=%lu",
-             st_after_wait1, RD_TAG(s_st1),
-             (unsigned)pin_after_wait1, (unsigned long)irq1);
-    SD_DebugLog_WriteLine(line);
-    Safe_USB_Printf("%s\r\n", line);
-
-    /* T2: 读一次六轴原始数据 (ReadAccelGyroRaw 末尾会 ClearInterruptStatus) */
-    raw_ret = ICM20948_ReadAccelGyroRaw(&ax, &ay, &az, &gx, &gy, &gz);
-
-    s_st2          = ICM20948_ReadBank0Reg_Checked(0x1A, &st_after_read);
-    pin_after_read = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
-    irq2           = icm_irq_count;
-
-    if (raw_ret == 0) {
-        snprintf(line, sizeof(line),
-                 "ICM_T2_AFTER_READ,RET=0,AX=%d,AY=%d,AZ=%d,GX=%d,GY=%d,GZ=%d,ST1=0x%02X(%s),PIN=%u,IRQ=%lu",
-                 ax, ay, az, gx, gy, gz,
-                 st_after_read, RD_TAG(s_st2),
-                 (unsigned)pin_after_read, (unsigned long)irq2);
-    } else {
-        snprintf(line, sizeof(line),
-                 "ICM_T2_AFTER_READ,RET=%u,AX=NA,AY=NA,AZ=NA,GX=NA,GY=NA,GZ=NA,ST1=0x%02X(%s),PIN=%u,IRQ=%lu",
-                 (unsigned)raw_ret,
-                 st_after_read, RD_TAG(s_st2),
-                 (unsigned)pin_after_read, (unsigned long)irq2);
-    }
-    SD_DebugLog_WriteLine(line);
-    Safe_USB_Printf("%s\r\n", line);
-
-    /* T3: 读完后再等 120ms，看 latched 模式是否再次产生中断 */
-    osDelay(120);
-
-    s_st3           = ICM20948_ReadBank0Reg_Checked(0x1A, &st_after_wait2);
-    pin_after_wait2 = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
-    irq3            = icm_irq_count;
+    /* 3. 读回确认锁存配置是否生效 */
+    cfg_after_enable = ICM20948_ReadBank0Reg_Debug(0x0F); // INT_PIN_CFG
+    en1_after_enable = ICM20948_ReadBank0Reg_Debug(0x11); // INT_ENABLE_1
 
     snprintf(line, sizeof(line),
-             "ICM_T3_SECOND_120MS,ST1=0x%02X(%s),PIN=%u,IRQ=%lu",
-             st_after_wait2, RD_TAG(s_st3),
-             (unsigned)pin_after_wait2, (unsigned long)irq3);
+             "ICM_CFG_CHECK,CFG=0x%02X,EN1=0x%02X",
+             cfg_after_enable,
+             en1_after_enable);
     SD_DebugLog_WriteLine(line);
     Safe_USB_Printf("%s\r\n", line);
 
-    /* 自检结束：恢复为禁用中断，避免影响后续正常录制流程 */
+    /* 4. 记录等待前的引脚和IRQ计数 */
+    pin_before_wait = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
+    irq_before = icm_irq_count;
+
+    snprintf(line, sizeof(line),
+             "ICM_BEFORE_WAIT,PIN=%u,IRQ=%lu",
+             (unsigned)pin_before_wait,
+             (unsigned long)irq_before);
+    SD_DebugLog_WriteLine(line);
+    Safe_USB_Printf("%s\r\n", line);
+
+    /* 5. 等待 Data Ready 产生 (50Hz ODR, 120ms内应有多次) */
+    osDelay(120);
+
+    /* 6. 核心验证: 先读PIN, 再读ST1, 再读PIN */
+    pin_before_st1 = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
+
+    st1 = ICM20948_ReadBank0Reg_Debug(0x1A);  // INT_STATUS_1
+
+    pin_after_st1 = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
+
+    irq_after = icm_irq_count;
+
+    snprintf(line, sizeof(line),
+             "ICM_FLAG_PIN_RESULT,PIN_BEFORE_ST1=%u,ST1=0x%02X,PIN_AFTER_ST1=%u,IRQ_BEFORE=%lu,IRQ_AFTER=%lu",
+             (unsigned)pin_before_st1,
+             st1,
+             (unsigned)pin_after_st1,
+             (unsigned long)irq_before,
+             (unsigned long)irq_after);
+    SD_DebugLog_WriteLine(line);
+    Safe_USB_Printf("%s\r\n", line);
+
+    /* 7. 结束后关闭中断并清状态 */
     ICM20948_DisableDataReadyInterrupt();
     ICM20948_ClearInterruptStatus();
 
-    SD_DebugLog_WriteLine("ICM_IRQ_SELFTEST_END");
-    Safe_USB_Printf("[ICM_IRQ_SELFTEST_END]\r\n");
-
-#undef RD_TAG
+    SD_DebugLog_WriteLine("ICM_INT_FLAG_PIN_CHECK_END");
+    Safe_USB_Printf("[ICM_INT_FLAG_PIN_CHECK_END]\r\n");
 }
 
 /**
