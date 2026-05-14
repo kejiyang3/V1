@@ -51,6 +51,7 @@ extern DMA_HandleTypeDef hdma_usart1_rx;  /* Defined in usart.c for USART1 RX DM
 
 volatile uint8_t ecg_streaming = 0;             /* ECG流使能标志 */
 volatile uint32_t ecg_irq_count = 0;             /* ECG INTB 中断计数 */
+volatile uint32_t icm_irq_count = 0;             /* ICM INT1 中断计数 */
 
 /* EcgTask handle (定义在 freertos.c) — 用于ISR→Task直接通知 */
 extern TaskHandle_t EcgTaskHandle;
@@ -96,11 +97,11 @@ int main(void)
 
   /* MCU Configuration--------------------------------------------------------*/
 
-  /* Reset of all peripherals, Initializes the FlaZ`  1`      ``sh interface and the Systick. */
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
    HAL_Init();
 
   /* USER CODE BEGIN Init */
-  /* Uw1 SER CODE END Init */
+  /* USER CODE END Init */
 
   /* Configure the system clock */
   SystemClock_Config();
@@ -283,6 +284,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     }
   }
   else if (GPIO_Pin == ICM_INT_Pin) {
+    icm_irq_count++;
     if (ImuTaskHandle != NULL) {
       vTaskNotifyGiveFromISR(ImuTaskHandle, &xHigherPriorityTaskWoken);
     }

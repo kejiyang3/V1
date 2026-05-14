@@ -154,6 +154,32 @@ void ICM20948_DisableDataReadyInterrupt(void)
     ICM20948_ClearInterruptStatus();
 }
 
+uint8_t ICM20948_ReadBank0Reg_Debug(uint8_t reg)
+{
+    ICM_SelectBank(0);
+    return Soft_I2C_ReadReg(ICM20948_ADDR, reg);
+}
+
+void ICM20948_EnableLatchedDataReadyInterrupt_Debug(void)
+{
+    ICM_SelectBank(0);
+
+    /*
+     * INT_PIN_CFG = 0xE0
+     * bit7 INT1_ACTL = 1: active low
+     * bit6 INT1_OPEN = 1: open drain
+     * bit5 INT1_LATCH_EN = 1: latch until status cleared
+     */
+    Soft_I2C_WriteReg(ICM20948_ADDR, 0x0F, 0xE0);
+
+    ICM20948_ClearInterruptStatus();
+
+    /*
+     * INT_ENABLE_1 bit0 = RAW_DATA_0_RDY_EN
+     */
+    Soft_I2C_WriteReg(ICM20948_ADDR, 0x11, 0x01);
+}
+
 uint8_t ICM20948_ReadAccelGyroRaw(int16_t *ax, int16_t *ay, int16_t *az,
                                   int16_t *gx, int16_t *gy, int16_t *gz)
 {
