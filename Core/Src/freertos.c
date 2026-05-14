@@ -25,6 +25,7 @@
 #include "ecg_usb_dump.h"
 #include "app_log.h"
 #include "sd_debug_log.h"
+#include "multi_sensor_logger.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -51,6 +52,8 @@ extern UART_HandleTypeDef huart1;
 extern DMA_HandleTypeDef hdma_usart1_rx;
 
 TaskHandle_t EcgTaskHandle = NULL;             /* ECG任务句柄, 供ISR直接通知 */
+TaskHandle_t PpgTaskHandle = NULL;             /* PPG任务句柄 */
+TaskHandle_t ImuTaskHandle = NULL;             /* IMU任务句柄 */
 
 /* ECG 临时 RAM 缓存 (短期观察用，不用作长期存储) */
 #define ECG_BUFFER_SIZE 10240
@@ -107,11 +110,25 @@ const osThreadAttr_t Task_BLE_attributes = {
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityLow7,
 };
-/* Definitions for Task_ECG_SDWriter */
-osThreadId_t Task_ECG_SDWriterHandle;
-const osThreadAttr_t Task_ECG_SDWriter_attributes = {
-  .name = "Task_ECG_SDWriter",
+/* Definitions for Task_PPG */
+osThreadId_t Task_PPGHandle;
+const osThreadAttr_t Task_PPG_attributes = {
+  .name = "Task_PPG",
   .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for Task_IMU */
+osThreadId_t Task_IMUHandle;
+const osThreadAttr_t Task_IMU_attributes = {
+  .name = "Task_IMU",
+  .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for Task_MultiSensor_SDWriter */
+osThreadId_t Task_MultiSensor_SDWriterHandle;
+const osThreadAttr_t Task_MultiSensor_SDWriter_attributes = {
+  .name = "Task_MSWriter",
+  .stack_size = 2048 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
 /* Definitions for Task_ECG_USBDump */
@@ -136,6 +153,8 @@ static void APP_Print_ECG_Storage_Info(void);
 void StartTask_LVGL(void *argument);
 void StartTask_Sensor(void *argument);
 void StartTask_Button(void *argument);
+void StartTask_PPG(void *argument);
+void StartTask_IMU(void *argument);
 
 extern void MX_USB_DEVICE_Init(void);
 void MX_FREERTOS_Init(void);
@@ -160,7 +179,7 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  ECG_SDLogger_InitQueue();
+  MultiSensorLogger_InitQueue();
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -177,9 +196,19 @@ void MX_FREERTOS_Init(void) {
   if (Task_ButtonHandle == NULL) g_task_create_error |= (1UL << 5);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  Task_ECG_SDWriterHandle = osThreadNew(StartTask_ECG_SDWriter, NULL, &Task_ECG_SDWriter_attributes);
-  if (Task_ECG_SDWriterHandle == NULL) g_task_create_error |= (1UL << 2);
-  /* USB Dump Task — V1 不创建，关闭 USB 文件发送 */
+  /* PPG 采集任务 */
+  Task_PPGHandle = osThreadNew(StartTask_PPG, NULL, &Task_PPG_attributes);
+  if (Task_PPGHandle == NULL) g_task_create_error |= (1UL << 6);
+
+  /* IMU 采集任务 */
+  Task_IMUHandle = osThreadNew(StartTask_IMU, NULL, &Task_IMU_attributes);
+  if (Task_IMUHandle == NULL) g_task_create_error |= (1UL << 7);
+
+  /* 多传感器 SD Writer (取代旧的 ECG_SDWriter) */
+  Task_MultiSensor_SDWriterHandle = osThreadNew(StartTask_MultiSensor_SDWriter, NULL, &Task_MultiSensor_SDWriter_attributes);
+  if (Task_MultiSensor_SDWriterHandle == NULL) g_task_create_error |= (1UL << 2);
+
+  /* USB Dump Task — V1 不创建 */
   /* USER CODE END RTOS_THREADS */
 }
 
@@ -273,7 +302,9 @@ void StartTask_Sensor(void *argument)
 
         g_ecg_rec.state = ECG_REC_RECORDING;
 
-        /* 等待 SDWriter 打开文件，最多 3000ms */
+        MultiSensorLogger_ResetForNewRecording();
+
+        /* 等待 MSWriter 打开文件，最多 3000ms */
         uint32_t t0 = HAL_GetTick();
         while (!g_ecg_rec.sd_file_opened && (HAL_GetTick() - t0 < 3000)) {
             osDelay(10);
@@ -285,16 +316,25 @@ void StartTask_Sensor(void *argument)
             continue;
         }
 
-        SD_DebugLog_WriteLine("CAL_TEST_START");
+        SD_DebugLog_WriteLine("RECORD_START");
 
         ecg_buf_idx = 0;
         g_sys_state = SYS_STATE_RECORDING;
-
-        /* 每次开始新记录前重置 MAX30003 相关统计 */
         ECG_ResetStats();
 
         while (ulTaskNotifyTake(pdTRUE, 0) > 0) {}
         __HAL_GPIO_EXTI_CLEAR_IT(ECG_INT_Pin);
+        __HAL_GPIO_EXTI_CLEAR_IT(PPG_INT_Pin);
+        __HAL_GPIO_EXTI_CLEAR_IT(ICM_INT_Pin);
+
+        {
+            uint8_t s1, s2;
+            MAX30102_ClearInterruptStatus(&s1, &s2);
+        }
+        ICM20948_ClearInterruptStatus();
+
+        MAX30102_EnableFifoAlmostFullInterrupt();
+        ICM20948_EnableDataReadyInterrupt();
 
         ecg_streaming = 1;
         MAX30003_StartStream();
@@ -307,10 +347,14 @@ void StartTask_Sensor(void *argument)
       if (g_ecg_rec.state == ECG_REC_RECORDING) {
         ecg_streaming = 0;
         MAX30003_StopStream();
-        ECG_SDLogger_RequestStop();
+
+        MAX30102_DisableInterrupts();
+        ICM20948_DisableDataReadyInterrupt();
+
+        MultiSensorLogger_RequestStopAndFlush();
         g_ecg_rec.state = ECG_REC_STOPPING;
 
-        SD_DebugLog_WriteLine("CAL_TEST_STOP_REQUEST");
+        SD_DebugLog_WriteLine("RECORD_STOP_REQUEST");
       }
     }
 
@@ -334,6 +378,57 @@ void StartTask_Sensor(void *argument)
     }
   }
   /* USER CODE END StartTask_Sensor */
+}
+
+/* USER CODE BEGIN Header_StartTask_PPG */
+/* USER CODE END Header_StartTask_PPG */
+void StartTask_PPG(void *argument)
+{
+  /* USER CODE BEGIN StartTask_PPG */
+  (void)argument;
+  PpgTaskHandle = xTaskGetCurrentTaskHandle();
+
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    if (g_ecg_rec.state != ECG_REC_RECORDING) {
+      continue;
+    }
+
+    uint32_t ir_buf[32];
+    uint32_t red_buf[32];
+
+    uint8_t n = MAX30102_ReadFIFO_Batch(ir_buf, red_buf, 32);
+
+    for (uint8_t i = 0; i < n; i++) {
+      MultiSensorLogger_AddPPG(ir_buf[i], red_buf[i]);
+    }
+  }
+  /* USER CODE END StartTask_PPG */
+}
+
+/* USER CODE BEGIN Header_StartTask_IMU */
+/* USER CODE END Header_StartTask_IMU */
+void StartTask_IMU(void *argument)
+{
+  /* USER CODE BEGIN StartTask_IMU */
+  (void)argument;
+  ImuTaskHandle = xTaskGetCurrentTaskHandle();
+
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    if (g_ecg_rec.state != ECG_REC_RECORDING) {
+      continue;
+    }
+
+    int16_t ax, ay, az, gx, gy, gz;
+
+    if (ICM20948_ReadAccelGyroRaw(&ax, &ay, &az, &gx, &gy, &gz) == 0) {
+      MultiSensorLogger_AddIMU(ax, ay, az, gx, gy, gz);
+    }
+  }
+  /* USER CODE END StartTask_IMU */
 }
 
 /* USER CODE BEGIN Header_StartTask_Audio */
@@ -417,8 +512,8 @@ void Packagedata_AddEcgSample(int16_t ecg)
       ecg_buffer[ecg_buf_idx++] = ecg;
     }
 
-    /* SD 队列 */
-    ECG_SDLogger_Enqueue(ecg);
+    /* 多传感器 block logger (取代旧 ECG_SDLogger_Enqueue) */
+    MultiSensorLogger_AddECG(ecg);
   }
 }
 

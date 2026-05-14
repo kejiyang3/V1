@@ -54,6 +54,8 @@ volatile uint32_t ecg_irq_count = 0;             /* ECG INTB 中断计数 */
 
 /* EcgTask handle (定义在 freertos.c) — 用于ISR→Task直接通知 */
 extern TaskHandle_t EcgTaskHandle;
+extern TaskHandle_t PpgTaskHandle;
+extern TaskHandle_t ImuTaskHandle;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -261,23 +263,32 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 
 /**
   * @brief GPIO EXTI Callback
-  * @note  V1: ONLY handles ECG_INT.
+  * @note  Handles ECG_INT, PPG_INT, ICM_INT.
   * @param GPIO_Pin: Pin number that triggered the interrupt
   */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
   if (GPIO_Pin == ECG_INT_Pin) {
     ecg_irq_count++;
 
     if (ecg_streaming && EcgTaskHandle != NULL) {
-      BaseType_t xHigherPriorityTaskWoken = pdFALSE;
       vTaskNotifyGiveFromISR(EcgTaskHandle, &xHigherPriorityTaskWoken);
-      portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     }
-    return;
+  }
+  else if (GPIO_Pin == PPG_INT_Pin) {
+    if (PpgTaskHandle != NULL) {
+      vTaskNotifyGiveFromISR(PpgTaskHandle, &xHigherPriorityTaskWoken);
+    }
+  }
+  else if (GPIO_Pin == ICM_INT_Pin) {
+    if (ImuTaskHandle != NULL) {
+      vTaskNotifyGiveFromISR(ImuTaskHandle, &xHigherPriorityTaskWoken);
+    }
   }
 
-  (void)GPIO_Pin;
+  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 /* USER CODE END 4 */
 

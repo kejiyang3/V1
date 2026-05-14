@@ -48,6 +48,7 @@ uint8_t ICM20948_Read_Data(void);
 uint8_t ICM20948_DataReady(void);
 void ICM20948_ClearInterruptStatus(void);
 void ICM20948_EnableDataReadyInterrupt(void);
+void ICM20948_DisableDataReadyInterrupt(void);
 uint8_t ICM20948_ReadAccelGyroRaw(int16_t *ax, int16_t *ay, int16_t *az,
                                   int16_t *gx, int16_t *gy, int16_t *gz);
 void Soft_I2C_ReadBytes(uint8_t dev_addr, uint8_t reg, uint8_t *buf, uint8_t len);
