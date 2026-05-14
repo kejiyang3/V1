@@ -68,6 +68,47 @@ void MX_FREERTOS_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+#if ICM_INT_LINE_PULLDOWN_TEST_ENABLE
+/**
+  * @brief  ICM_INT 线路拉低测试 — 用开漏输出验证 PH1→TXS→ICM 信号通道
+  * @note   阻塞式运行，2s 拉低 / 2s 释放循环，供示波器观察。
+  *         使用 open-drain 输出，只拉低不推高，对 ICM 开漏中断线安全。
+  */
+static void ICM_INT_Line_Pulldown_Test(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    /* 1. 禁用 EXTI1，清 pending */
+    HAL_NVIC_DisableIRQ(EXTI1_IRQn);
+    __HAL_GPIO_EXTI_CLEAR_IT(ICM_INT_Pin);
+
+    /* 2. 重配 PH1 为开漏输出 (只拉低/释放，不推挽推高) */
+    HAL_GPIO_DeInit(ICM_INT_GPIO_Port, ICM_INT_Pin);
+
+    GPIO_InitStruct.Pin   = ICM_INT_Pin;
+    GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_OD;
+    GPIO_InitStruct.Pull  = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(ICM_INT_GPIO_Port, &GPIO_InitStruct);
+
+    /* 3. 初始释放为高阻，确保起始状态正确 */
+    HAL_GPIO_WritePin(ICM_INT_GPIO_Port, ICM_INT_Pin, GPIO_PIN_SET);
+    HAL_Delay(1000);
+
+    /* 4. 循环: LOW 2s → RELEASE 2s (周期 4s) */
+    while (1) {
+        /* 开漏 RESET = 主动拉低，适合示波器抓稳态低电平 */
+        HAL_GPIO_WritePin(ICM_INT_GPIO_Port, ICM_INT_Pin, GPIO_PIN_RESET);
+        HAL_Delay(2000);
+
+        /* 开漏 SET = 释放为高阻，高电平由上拉恢复 */
+        HAL_GPIO_WritePin(ICM_INT_GPIO_Port, ICM_INT_Pin, GPIO_PIN_SET);
+        HAL_Delay(2000);
+    }
+}
+#endif /* ICM_INT_LINE_PULLDOWN_TEST_ENABLE */
+
 static void ECG_FCLK_MCO_ForceInit(void)
 {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
@@ -115,6 +156,9 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+#if ICM_INT_LINE_PULLDOWN_TEST_ENABLE
+  ICM_INT_Line_Pulldown_Test();
+#endif
   MX_DMA_Init();
   MX_SDMMC1_SD_Init();
   MX_SAI1_Init();
