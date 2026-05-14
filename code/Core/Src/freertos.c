@@ -21,12 +21,11 @@
 #include "usbd_cdc_if.h"
 #include "usbd_core.h"
 #include "ecg_record_control.h"
-#include "ecg_sd_logger.h"
 #include "ecg_usb_dump.h"
 #include "app_log.h"
 #include "sd_debug_log.h"
+#include "multi_sensor_logger.h"
 /* USER CODE END Includes */
-
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 /* USER CODE END PTD */
@@ -51,6 +50,8 @@ extern UART_HandleTypeDef huart1;
 extern DMA_HandleTypeDef hdma_usart1_rx;
 
 TaskHandle_t EcgTaskHandle = NULL;             /* ECG任务句柄, 供ISR直接通知 */
+TaskHandle_t PpgTaskHandle = NULL;             /* PPG任务句柄 */
+TaskHandle_t ImuTaskHandle = NULL;             /* IMU任务句柄 */
 
 /* ECG 临时 RAM 缓存 (短期观察用，不用作长期存储) */
 #define ECG_BUFFER_SIZE 10240
@@ -107,11 +108,25 @@ const osThreadAttr_t Task_BLE_attributes = {
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityLow7,
 };
-/* Definitions for Task_ECG_SDWriter */
-osThreadId_t Task_ECG_SDWriterHandle;
-const osThreadAttr_t Task_ECG_SDWriter_attributes = {
-  .name = "Task_ECG_SDWriter",
+/* Definitions for Task_PPG */
+osThreadId_t Task_PPGHandle;
+const osThreadAttr_t Task_PPG_attributes = {
+  .name = "Task_PPG",
   .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for Task_IMU */
+osThreadId_t Task_IMUHandle;
+const osThreadAttr_t Task_IMU_attributes = {
+  .name = "Task_IMU",
+  .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for Task_MultiSensor_SDWriter */
+osThreadId_t Task_MultiSensor_SDWriterHandle;
+const osThreadAttr_t Task_MultiSensor_SDWriter_attributes = {
+  .name = "Task_MSWriter",
+  .stack_size = 2048 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
 /* Definitions for Task_ECG_USBDump */
@@ -130,12 +145,14 @@ const osMutexAttr_t Mtx_SDCard_attributes = {
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 void Safe_USB_Printf(const char *format, ...);
-static void APP_Print_ECG_Storage_Info(void);
+static void APP_ICM20948_IntFlagAndPinLevelCheck(void);
 /* USER CODE END FunctionPrototypes */
 
 void StartTask_LVGL(void *argument);
 void StartTask_Sensor(void *argument);
 void StartTask_Button(void *argument);
+void StartTask_PPG(void *argument);
+void StartTask_IMU(void *argument);
 
 extern void MX_USB_DEVICE_Init(void);
 void MX_FREERTOS_Init(void);
@@ -160,7 +177,7 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  ECG_SDLogger_InitQueue();
+  MultiSensorLogger_InitQueue();
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -177,9 +194,19 @@ void MX_FREERTOS_Init(void) {
   if (Task_ButtonHandle == NULL) g_task_create_error |= (1UL << 5);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  Task_ECG_SDWriterHandle = osThreadNew(StartTask_ECG_SDWriter, NULL, &Task_ECG_SDWriter_attributes);
-  if (Task_ECG_SDWriterHandle == NULL) g_task_create_error |= (1UL << 2);
-  /* USB Dump Task — V1 不创建，关闭 USB 文件发送 */
+  /* PPG 采集任务 */
+  Task_PPGHandle = osThreadNew(StartTask_PPG, NULL, &Task_PPG_attributes);
+  if (Task_PPGHandle == NULL) g_task_create_error |= (1UL << 6);
+
+  /* IMU 采集任务 */
+  Task_IMUHandle = osThreadNew(StartTask_IMU, NULL, &Task_IMU_attributes);
+  if (Task_IMUHandle == NULL) g_task_create_error |= (1UL << 7);
+
+  /* 多传感器 SD Writer (取代旧的 ECG_SDWriter) */
+  Task_MultiSensor_SDWriterHandle = osThreadNew(StartTask_MultiSensor_SDWriter, NULL, &Task_MultiSensor_SDWriter_attributes);
+  if (Task_MultiSensor_SDWriterHandle == NULL) g_task_create_error |= (1UL << 2);
+
+  /* USB Dump Task — V1 不创建 */
   /* USER CODE END RTOS_THREADS */
 }
 
@@ -241,18 +268,31 @@ void StartTask_Sensor(void *argument)
   else
       Safe_USB_Printf("[MAX30102] UNKNOWN INIT RESULT=%d\r\n", (int)ppg_ret);
 
-  if (icm_ret == 0)
-      Safe_USB_Printf("[ICM20948] I2C CALL OK, WHO_AM_I OK, INIT OK\r\n");
-  else
-      Safe_USB_Printf("[ICM20948] I2C CALL FAIL OR WHO_AM_I MISMATCH, RET=%u\r\n", (unsigned int)icm_ret);
+  if (icm_ret == 0) {
+      Safe_USB_Printf("[ICM20948] INIT OK (WHO_AM_I + 10x probe passed)\r\n");
+  } else {
+      Safe_USB_Printf("[ICM20948] INIT FAILED, RET=%u"
+                      " (1=WHO_AM_I,2=PWR,3=Bank2,4=INT_CFG,5=VerifyRd,6=VerifyVal,7=10xWHO)\r\n",
+                      (unsigned int)icm_ret);
+  }
   Safe_USB_Printf("[/SENSOR_INIT]\r\n");
 
   if (ppg_ret == MAX30102_INIT_OK)          SD_DebugLog_WriteLine("MAX30102_INIT_OK");
   else if (ppg_ret == MAX30102_INIT_NOT_FOUND) SD_DebugLog_WriteLine("MAX30102_INIT_NOT_FOUND");
   else                                       SD_DebugLog_WriteLine("MAX30102_INIT_CONFIG_FAILED");
 
-  if (icm_ret == 0) SD_DebugLog_WriteLine("ICM20948_INIT_OK");
-  else              SD_DebugLog_WriteLine("ICM20948_INIT_FAILED");
+  if (icm_ret == 0) {
+      SD_DebugLog_WriteLine("ICM20948_INIT_OK");
+  } else {
+      char icm_err[32];
+      snprintf(icm_err, sizeof(icm_err), "ICM20948_INIT_FAILED,RET=%u", (unsigned int)icm_ret);
+      SD_DebugLog_WriteLine(icm_err);
+  }
+
+  /* ICM20948 中断标志+引脚电平验证 — 仅在 ICM 初始化成功后执行一次 */
+  if (icm_ret == 0) {
+      APP_ICM20948_IntFlagAndPinLevelCheck();
+  }
 
   /* ECG 初始化照旧，不受 PPG/ICM 影响 */
   MAX30003_Init();
@@ -273,7 +313,9 @@ void StartTask_Sensor(void *argument)
 
         g_ecg_rec.state = ECG_REC_RECORDING;
 
-        /* 等待 SDWriter 打开文件，最多 3000ms */
+        MultiSensorLogger_ResetForNewRecording();
+
+        /* 等待 MSWriter 打开文件，最多 3000ms */
         uint32_t t0 = HAL_GetTick();
         while (!g_ecg_rec.sd_file_opened && (HAL_GetTick() - t0 < 3000)) {
             osDelay(10);
@@ -285,16 +327,25 @@ void StartTask_Sensor(void *argument)
             continue;
         }
 
-        SD_DebugLog_WriteLine("CAL_TEST_START");
+        SD_DebugLog_WriteLine("RECORD_START");
 
         ecg_buf_idx = 0;
         g_sys_state = SYS_STATE_RECORDING;
-
-        /* 每次开始新记录前重置 MAX30003 相关统计 */
         ECG_ResetStats();
 
         while (ulTaskNotifyTake(pdTRUE, 0) > 0) {}
         __HAL_GPIO_EXTI_CLEAR_IT(ECG_INT_Pin);
+        __HAL_GPIO_EXTI_CLEAR_IT(PPG_INT_Pin);
+        __HAL_GPIO_EXTI_CLEAR_IT(ICM_INT_Pin);
+
+        {
+            uint8_t s1, s2;
+            MAX30102_ClearInterruptStatus(&s1, &s2);
+        }
+        ICM20948_ClearInterruptStatus();
+
+        MAX30102_EnableFifoAlmostFullInterrupt();
+        ICM20948_EnableDataReadyInterrupt();
 
         ecg_streaming = 1;
         MAX30003_StartStream();
@@ -307,10 +358,14 @@ void StartTask_Sensor(void *argument)
       if (g_ecg_rec.state == ECG_REC_RECORDING) {
         ecg_streaming = 0;
         MAX30003_StopStream();
-        ECG_SDLogger_RequestStop();
+
+        MAX30102_DisableInterrupts();
+        ICM20948_DisableDataReadyInterrupt();
+
+        MultiSensorLogger_RequestStopAndFlush();
         g_ecg_rec.state = ECG_REC_STOPPING;
 
-        SD_DebugLog_WriteLine("CAL_TEST_STOP_REQUEST");
+        SD_DebugLog_WriteLine("RECORD_STOP_REQUEST");
       }
     }
 
@@ -334,6 +389,57 @@ void StartTask_Sensor(void *argument)
     }
   }
   /* USER CODE END StartTask_Sensor */
+}
+
+/* USER CODE BEGIN Header_StartTask_PPG */
+/* USER CODE END Header_StartTask_PPG */
+void StartTask_PPG(void *argument)
+{
+  /* USER CODE BEGIN StartTask_PPG */
+  (void)argument;
+  PpgTaskHandle = xTaskGetCurrentTaskHandle();
+
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    if (g_ecg_rec.state != ECG_REC_RECORDING) {
+      continue;
+    }
+
+    uint32_t ir_buf[32];
+    uint32_t red_buf[32];
+
+    uint8_t n = MAX30102_ReadFIFO_Batch(ir_buf, red_buf, 32);
+
+    for (uint8_t i = 0; i < n; i++) {
+      MultiSensorLogger_AddPPG(ir_buf[i], red_buf[i]);
+    }
+  }
+  /* USER CODE END StartTask_PPG */
+}
+
+/* USER CODE BEGIN Header_StartTask_IMU */
+/* USER CODE END Header_StartTask_IMU */
+void StartTask_IMU(void *argument)
+{
+  /* USER CODE BEGIN StartTask_IMU */
+  (void)argument;
+  ImuTaskHandle = xTaskGetCurrentTaskHandle();
+
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    if (g_ecg_rec.state != ECG_REC_RECORDING) {
+      continue;
+    }
+
+    int16_t ax, ay, az, gx, gy, gz;
+
+    if (ICM20948_ReadAccelGyroRaw(&ax, &ay, &az, &gx, &gy, &gz) == 0) {
+      MultiSensorLogger_AddIMU(ax, ay, az, gx, gy, gz);
+    }
+  }
+  /* USER CODE END StartTask_IMU */
 }
 
 /* USER CODE BEGIN Header_StartTask_Audio */
@@ -403,6 +509,94 @@ void StartTask_BLE(void *argument)
 /* USER CODE BEGIN Application */
 
 /**
+  * @brief  ICM20948 中断标志+引脚电平最小验证 — PIN→ST1→PIN 顺序读
+  * @note   在锁存模式下先读 PH1 电平再读 INT_STATUS_1 再读 PH1 电平，
+  *         避免读状态寄存器意外清除锁存中断后引脚恢复高。
+  *         结果输出到 SD debug_log 和 USB CDC (一次性)。
+  */
+static void APP_ICM20948_IntFlagAndPinLevelCheck(void)
+{
+    char line[192];
+
+    uint8_t cfg_after_enable = 0;
+    uint8_t en1_after_enable = 0;
+
+    GPIO_PinState pin_before_wait;
+    GPIO_PinState pin_before_st1;
+    GPIO_PinState pin_after_st1;
+
+    uint8_t st1 = 0;
+
+    uint32_t irq_before = 0;
+    uint32_t irq_after = 0;
+
+    extern volatile uint32_t icm_irq_count;
+
+    SD_DebugLog_WriteLine("ICM_INT_FLAG_PIN_CHECK_BEGIN");
+    Safe_USB_Printf("\r\n[ICM_INT_FLAG_PIN_CHECK_BEGIN]\r\n");
+
+    /* 1. 关闭旧中断并清旧状态 */
+    ICM20948_DisableDataReadyInterrupt();
+    ICM20948_ClearInterruptStatus();
+    osDelay(20);
+
+    /* 2. 开启锁存式 Data Ready 中断 */
+    ICM20948_EnableLatchedDataReadyInterrupt_Debug();
+    osDelay(5);
+
+    /* 3. 读回确认锁存配置是否生效 */
+    cfg_after_enable = ICM20948_ReadBank0Reg_Debug(0x0F); // INT_PIN_CFG
+    en1_after_enable = ICM20948_ReadBank0Reg_Debug(0x11); // INT_ENABLE_1
+
+    snprintf(line, sizeof(line),
+             "ICM_CFG_CHECK,CFG=0x%02X,EN1=0x%02X",
+             cfg_after_enable,
+             en1_after_enable);
+    SD_DebugLog_WriteLine(line);
+    Safe_USB_Printf("%s\r\n", line);
+
+    /* 4. 记录等待前的引脚和IRQ计数 */
+    pin_before_wait = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
+    irq_before = icm_irq_count;
+
+    snprintf(line, sizeof(line),
+             "ICM_BEFORE_WAIT,PIN=%u,IRQ=%lu",
+             (unsigned)pin_before_wait,
+             (unsigned long)irq_before);
+    SD_DebugLog_WriteLine(line);
+    Safe_USB_Printf("%s\r\n", line);
+
+    /* 5. 等待 Data Ready 产生 (50Hz ODR, 120ms内应有多次) */
+    osDelay(120);
+
+    /* 6. 核心验证: 先读PIN, 再读ST1, 再读PIN */
+    pin_before_st1 = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
+
+    st1 = ICM20948_ReadBank0Reg_Debug(0x1A);  // INT_STATUS_1
+
+    pin_after_st1 = HAL_GPIO_ReadPin(ICM_INT_GPIO_Port, ICM_INT_Pin);
+
+    irq_after = icm_irq_count;
+
+    snprintf(line, sizeof(line),
+             "ICM_FLAG_PIN_RESULT,PIN_BEFORE_ST1=%u,ST1=0x%02X,PIN_AFTER_ST1=%u,IRQ_BEFORE=%lu,IRQ_AFTER=%lu",
+             (unsigned)pin_before_st1,
+             st1,
+             (unsigned)pin_after_st1,
+             (unsigned long)irq_before,
+             (unsigned long)irq_after);
+    SD_DebugLog_WriteLine(line);
+    Safe_USB_Printf("%s\r\n", line);
+
+    /* 7. 结束后关闭中断并清状态 */
+    ICM20948_DisableDataReadyInterrupt();
+    ICM20948_ClearInterruptStatus();
+
+    SD_DebugLog_WriteLine("ICM_INT_FLAG_PIN_CHECK_END");
+    Safe_USB_Printf("[ICM_INT_FLAG_PIN_CHECK_END]\r\n");
+}
+
+/**
   * @brief  Producer: 将 ECG 样本存入 RAM buffer 和 SD 队列
   */
 void Packagedata_AddEcgSample(int16_t ecg)
@@ -417,57 +611,8 @@ void Packagedata_AddEcgSample(int16_t ecg)
       ecg_buffer[ecg_buf_idx++] = ecg;
     }
 
-    /* SD 队列 */
-    ECG_SDLogger_Enqueue(ecg);
-  }
-}
-
-/**
-  * @brief  打印 ECG 存储摘要信息 (USB Info 按钮)
-  * @note   g_usb_info_press_count 定义在 app_lvgl.c，声明在 app_lvgl.h
-  */
-static void APP_Print_ECG_Storage_Info(void)
-{
-  uint32_t now = HAL_GetTick();
-  uint32_t duration = 0;
-  char buf[512];
-
-  if (g_ecg_rec.start_tick > 0) {
-    duration = now - g_ecg_rec.start_tick;
-  }
-
-  int n = snprintf(buf, sizeof(buf),
-    "\r\n[ECG_INFO] press=%lu\r\n"
-    "state=%d\r\n"
-    "file=%s\r\n"
-    "duration_ms=%lu\r\n"
-    "sample_count=%lu\r\n"
-    "written_count=%lu\r\n"
-    "drop_count=%lu\r\n"
-    "sd_bytes=%lu\r\n"
-    "sync_count=%lu\r\n"
-    "ecg_irq=%lu\r\n"
-    "tx_ok=%lu\r\n"
-    "tx_busy=%lu\r\n"
-    "tx_drop=%lu\r\n"
-    "[/ECG_INFO]\r\n",
-    g_usb_info_press_count,
-    g_ecg_rec.state,
-    g_ecg_rec.file_name,
-    duration,
-    g_ecg_rec.ecg_sample_count,
-    g_ecg_rec.ecg_written_count,
-    g_ecg_rec.ecg_drop_count,
-    g_ecg_rec.sd_write_bytes,
-    g_ecg_rec.sd_sync_count,
-    ecg_irq_count,
-    usb_tx_ok_count,
-    usb_tx_busy_count,
-    usb_tx_drop_count
-  );
-
-  if (n > 0) {
-    Safe_USB_Printf("%s", buf);
+    /* 多传感器 block logger (取代旧 ECG_SDLogger_Enqueue) */
+    MultiSensorLogger_AddECG(ecg);
   }
 }
 

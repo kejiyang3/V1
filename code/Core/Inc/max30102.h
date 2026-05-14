@@ -71,6 +71,10 @@ uint8_t MAX30102_ReadFIFO_Batch(uint32_t *ir_buf, uint32_t *red_buf, uint8_t max
 uint16_t MAX30102_getHeartRate(float *input_data, uint16_t cache_nums);
 float MAX30102_getSpO2(float *ir_input_data, float *red_input_data, uint16_t cache_nums);
 
+/* 中断使能/禁用 (recording start/stop 时调用) */
+ErrorStatus MAX30102_EnableFifoAlmostFullInterrupt(void);
+ErrorStatus MAX30102_DisableInterrupts(void);
+
 extern volatile uint8_t max30102_int_flag;
 
 #ifdef __cplusplus

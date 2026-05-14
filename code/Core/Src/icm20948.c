@@ -13,6 +13,7 @@ extern I2C_HandleTypeDef hi2c3;
 
 // 2. 软件 I2C 读写寄存器封装
 // =====================================================================
+/* 原始版本 (兼容现有调用方) */
 static void Soft_I2C_WriteReg(uint8_t dev_addr, uint8_t reg, uint8_t data) {
     HAL_I2C_Mem_Write(&hi2c3, (dev_addr << 1), reg, I2C_MEMADD_SIZE_8BIT, &data, 1, 100);
 }
@@ -23,6 +24,17 @@ static uint8_t Soft_I2C_ReadReg(uint8_t dev_addr, uint8_t reg) {
     return val;
 }
 
+/* checked 版本 — 返回 HAL 状态，不再将 I2C 失败伪装为 0 */
+static HAL_StatusTypeDef Soft_I2C_WriteReg_Checked(uint8_t dev_addr, uint8_t reg, uint8_t data) {
+    return HAL_I2C_Mem_Write(&hi2c3, (dev_addr << 1), reg, I2C_MEMADD_SIZE_8BIT, &data, 1, 100);
+}
+
+static HAL_StatusTypeDef Soft_I2C_ReadReg_Checked(uint8_t dev_addr, uint8_t reg, uint8_t *val) {
+    if (val == NULL) return HAL_ERROR;
+    *val = 0;
+    return HAL_I2C_Mem_Read(&hi2c3, (dev_addr << 1), reg, I2C_MEMADD_SIZE_8BIT, val, 1, 100);
+}
+
 void Soft_I2C_ReadBytes(uint8_t dev_addr, uint8_t reg, uint8_t *buf, uint8_t len) {
     HAL_I2C_Mem_Read(&hi2c3, (dev_addr << 1), reg, I2C_MEMADD_SIZE_8BIT, buf, len, 100);
 }
@@ -31,92 +43,111 @@ static void ICM_SelectBank(uint8_t bank) {
     Soft_I2C_WriteReg(ICM20948_ADDR, REG_BANK_SEL, bank << 4);
 }
 
+static HAL_StatusTypeDef ICM_SelectBank_Checked(uint8_t bank) {
+    return Soft_I2C_WriteReg_Checked(ICM20948_ADDR, REG_BANK_SEL, bank << 4);
+}
+
 // =====================================================================
-// 3. ICM-20948 初始化与读取 (集成中断清零与9轴)
+// 3. ICM-20948 Init (checked write + post-init verify + 10x WHO_AM_I)
 // =====================================================================
-uint8_t ICM20948_Init(void) {
+uint8_t ICM20948_Init(void)
+{
+    HAL_StatusTypeDef s;
+    uint8_t val;
+
     HAL_Delay(10);
 
     /*
      * Address convention in this project:
      * - ICM20948_ADDR is stored as 7-bit address 0x68.
-     * - Soft_I2C_ReadReg / Soft_I2C_WriteReg shift it left by 1
-     *   when passing the address to STM32 HAL.
-     * - Do not redefine ICM20948_ADDR as 0xD0, otherwise it will be shifted twice.
+     * - Soft_I2C_ReadReg_Checked / Soft_I2C_WriteReg_Checked shift
+     *   it left by 1 when passing to STM32 HAL.
      */
 
-    ICM_SelectBank(0);
-    uint8_t who_am_i = Soft_I2C_ReadReg(ICM20948_ADDR, REG_WHO_AM_I);
-    if (who_am_i != 0xEA) {
-        return 1;
+    /* --- 0. 初始 WHO_AM_I --- */
+    s = Soft_I2C_ReadReg_Checked(ICM20948_ADDR, REG_WHO_AM_I, &val);
+    if (s != HAL_OK || val != 0xEA) return 1;
+
+    /* --- 1. 唤醒并复位 (return code 2) --- */
+    if (Soft_I2C_WriteReg_Checked(ICM20948_ADDR, REG_PWR_MGMT_1, 0x80) != HAL_OK) return 2;
+    HAL_Delay(50);
+    if (Soft_I2C_WriteReg_Checked(ICM20948_ADDR, REG_PWR_MGMT_1, 0x01) != HAL_OK) return 2;
+    if (Soft_I2C_WriteReg_Checked(ICM20948_ADDR, REG_PWR_MGMT_2, 0x00) != HAL_OK) return 2;
+
+    /* --- 2. Bank 2: 量程与采样率 (return code 3) --- */
+    if (ICM_SelectBank_Checked(2) != HAL_OK) return 3;
+
+    if (Soft_I2C_WriteReg_Checked(ICM20948_ADDR, 0x14, 0x02) != HAL_OK) return 3; // ACCEL_CONFIG: +-4g
+    if (Soft_I2C_WriteReg_Checked(ICM20948_ADDR, 0x01, 0x03) != HAL_OK) return 3; // GYRO_CONFIG_1: +-500dps
+
+    if (Soft_I2C_WriteReg_Checked(ICM20948_ADDR, 0x09, 0x01) != HAL_OK) return 3; // ODR_ALIGN_EN
+
+    /* Accel ODR = 1125Hz / (1 + div): div=21 -> 51.14Hz */
+    if (Soft_I2C_WriteReg_Checked(ICM20948_ADDR, 0x10, 0x00) != HAL_OK) return 3;
+    if (Soft_I2C_WriteReg_Checked(ICM20948_ADDR, 0x11, 0x15) != HAL_OK) return 3;
+
+    /* Gyro ODR = 1125Hz / (1 + div): div=21 -> 51.14Hz */
+    if (Soft_I2C_WriteReg_Checked(ICM20948_ADDR, 0x00, 0x15) != HAL_OK) return 3;
+
+    /* --- 3. 磁力计 AK09916 + I2C Master (编译开关) --- */
+#if ICM20948_ENABLE_MAG_MASTER
+    ICM_SelectBank_Checked(0);
+    Soft_I2C_WriteReg_Checked(ICM20948_ADDR, REG_INT_PIN_CFG, 0xC2); // Bypass enable
+    HAL_Delay(10);
+
+    {
+        uint8_t ak_addr = 0x0C;
+        Soft_I2C_WriteReg_Checked(ak_addr, 0x32, 0x01); // mag soft reset
+        HAL_Delay(10);
+        Soft_I2C_WriteReg_Checked(ak_addr, 0x31, 0x08); // 100Hz continuous mode4
     }
 
-    // 1. 唤醒并复位
-    Soft_I2C_WriteReg(ICM20948_ADDR, REG_PWR_MGMT_1, 0x80); 
-    HAL_Delay(50);
-    Soft_I2C_WriteReg(ICM20948_ADDR, REG_PWR_MGMT_1, 0x01); 
-    Soft_I2C_WriteReg(ICM20948_ADDR, REG_PWR_MGMT_2, 0x00); 
+    Soft_I2C_WriteReg_Checked(ICM20948_ADDR, REG_INT_PIN_CFG, 0xC0); // close bypass
 
-    // 2. 配置量程与采样率: Bank 2
-    ICM_SelectBank(2);
+    ICM_SelectBank_Checked(3);
+    Soft_I2C_WriteReg_Checked(ICM20948_ADDR, 0x01, 0x07);
+    Soft_I2C_WriteReg_Checked(ICM20948_ADDR, 0x03, 0x0C | 0x80);
+    Soft_I2C_WriteReg_Checked(ICM20948_ADDR, 0x04, 0x11);
+    Soft_I2C_WriteReg_Checked(ICM20948_ADDR, 0x05, 0x80 | 0x08);
 
-    /* 2a. 量程配置 */
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x14, 0x02); // ACCEL_CONFIG: +-4g
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x01, 0x03); // GYRO_CONFIG_1: +-500dps
+    ICM_SelectBank_Checked(0);
+    Soft_I2C_WriteReg_Checked(ICM20948_ADDR, REG_USER_CTRL, 0x20); // Master enable
+#endif
 
-    /* 2b. 采样率分频配置 (目标接近 50Hz) */
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x09, 0x01); // ODR_ALIGN_EN: 使能 ODR 对齐
+    /* --- 4. 返回 Bank 0, 中断引脚配置 (return code 4) --- */
+    if (ICM_SelectBank_Checked(0) != HAL_OK) return 4;
+    if (Soft_I2C_WriteReg_Checked(ICM20948_ADDR, REG_INT_PIN_CFG, 0xC0) != HAL_OK) return 4;
 
-    /* Accel ODR = 1125Hz / (1 + div)
-       目标 50Hz: div = 21 (0x15) -> 1125/22 = 51.14 Hz
-    */
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x10, 0x00); // ACCEL_SMPLRT_DIV_1
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x11, 0x15); // ACCEL_SMPLRT_DIV_2
+    /* 清全部 INT_STATUS */
+    {
+        uint8_t dummy;
+        Soft_I2C_ReadReg_Checked(ICM20948_ADDR, 0x19, &dummy);
+        Soft_I2C_ReadReg_Checked(ICM20948_ADDR, 0x1A, &dummy);
+        Soft_I2C_ReadReg_Checked(ICM20948_ADDR, 0x1B, &dummy);
+        Soft_I2C_ReadReg_Checked(ICM20948_ADDR, 0x1C, &dummy);
+    }
 
-    /* Gyro ODR = 1125Hz / (1 + div)
-       目标 50Hz: div = 21 (0x15) -> 1125/22 = 51.14 Hz
-    */
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x00, 0x15); // GYRO_SMPLRT_DIV = 21
+    /* --- 5. 初始化后立即回读关键寄存器 (return code 5=读失败, 6=值不匹配) --- */
+    {
+        uint8_t whoami_post, pwr1_post, pwr2_post, pin_cfg_post;
 
-    // 3. 开启内部 AK09916 磁力计
-    ICM_SelectBank(0);
-    Soft_I2C_WriteReg(ICM20948_ADDR, REG_INT_PIN_CFG, 0xC2); // Bypass使能 + ActiveLow + OpenDrain
-    HAL_Delay(10);
-    
-    uint8_t ak_addr = 0x0C;
-    Soft_I2C_WriteReg(ak_addr, 0x32, 0x01); // 磁力计软复位
-    HAL_Delay(10);
-    Soft_I2C_WriteReg(ak_addr, 0x31, 0x08); // 100Hz 连续模式4
-    
-    Soft_I2C_WriteReg(ICM20948_ADDR, REG_INT_PIN_CFG, 0xC0); // 关闭Bypass，保持ActiveLow+OpenDrain
-    
-    ICM_SelectBank(3);
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x01, 0x07);        
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x03, 0x0C | 0x80); 
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x04, 0x11);        
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x05, 0x80 | 0x08); 
-    
-    ICM_SelectBank(0);
-    Soft_I2C_WriteReg(ICM20948_ADDR, REG_USER_CTRL, 0x20); // 使能 Master
+        if (Soft_I2C_ReadReg_Checked(ICM20948_ADDR, REG_WHO_AM_I,     &whoami_post)   != HAL_OK) return 5;
+        if (Soft_I2C_ReadReg_Checked(ICM20948_ADDR, REG_PWR_MGMT_1,   &pwr1_post)     != HAL_OK) return 5;
+        if (Soft_I2C_ReadReg_Checked(ICM20948_ADDR, REG_PWR_MGMT_2,   &pwr2_post)     != HAL_OK) return 5;
+        if (Soft_I2C_ReadReg_Checked(ICM20948_ADDR, REG_INT_PIN_CFG,  &pin_cfg_post)  != HAL_OK) return 5;
 
-    // ==========================================================
-    // 【调试模式】：禁用全部 ICM 中断源 + 清全部 INT_STATUS
-    // INT_PIN_CFG = 0xC0: INT1_ACTL(bit7)=1 低电平有效, INT1_OPEN(bit6)=1 开漏输出
-    // ==========================================================
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x0F, 0xC0);   // INT_PIN_CFG: Active Low, Open-Drain
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x10, 0x00);   // INT_ENABLE: 禁用
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x11, 0x00);   // INT_ENABLE_1: 禁用 Data Ready
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x12, 0x00);   // INT_ENABLE_2: 禁用
-    Soft_I2C_WriteReg(ICM20948_ADDR, 0x13, 0x00);   // INT_ENABLE_3: 禁用
+        if (whoami_post  != 0xEA) return 6;
+        if (pwr1_post    != 0x01) return 6;
+        if (pwr2_post    != 0x00) return 6;
+        if (pin_cfg_post != 0xC0) return 6;
+    }
 
-    // 读取所有 INT_STATUS 以清除 pending 中断
-    uint8_t dummy;
-    dummy = Soft_I2C_ReadReg(ICM20948_ADDR, 0x19); (void)dummy;  // INT_STATUS
-    dummy = Soft_I2C_ReadReg(ICM20948_ADDR, 0x1A); (void)dummy;  // INT_STATUS_1
-    dummy = Soft_I2C_ReadReg(ICM20948_ADDR, 0x1B); (void)dummy;  // INT_STATUS_2
-    dummy = Soft_I2C_ReadReg(ICM20948_ADDR, 0x1C); (void)dummy;  // INT_STATUS_3
-
-    Safe_USB_Printf("[ICM20948] interrupts disabled and status cleared for debug\r\n");
+    /* --- 6. 10 次连续 WHO_AM_I 读回, 间隔 20ms (return code 7) --- */
+    for (int i = 0; i < 10; i++) {
+        HAL_Delay(20);
+        s = Soft_I2C_ReadReg_Checked(ICM20948_ADDR, REG_WHO_AM_I, &val);
+        if (s != HAL_OK || val != 0xEA) return 7;
+    }
 
     return 0;
 }
@@ -151,7 +182,46 @@ void ICM20948_EnableDataReadyInterrupt(void)
     ICM20948_ClearInterruptStatus();
     /* INT_ENABLE_1 bit0 = RAW_DATA_0_RDY_EN */
     Soft_I2C_WriteReg(ICM20948_ADDR, 0x11, 0x01);
-    Safe_USB_Printf("[ICM20948] Data Ready interrupt enabled\r\n");
+}
+
+void ICM20948_DisableDataReadyInterrupt(void)
+{
+    ICM_SelectBank(0);
+    /* INT_ENABLE_1: 禁用 Data Ready */
+    Soft_I2C_WriteReg(ICM20948_ADDR, 0x11, 0x00);
+    ICM20948_ClearInterruptStatus();
+}
+
+uint8_t ICM20948_ReadBank0Reg_Debug(uint8_t reg)
+{
+    ICM_SelectBank(0);
+    return Soft_I2C_ReadReg(ICM20948_ADDR, reg);
+}
+
+HAL_StatusTypeDef ICM20948_ReadBank0Reg_Checked(uint8_t reg, uint8_t *val)
+{
+    if (ICM_SelectBank_Checked(0) != HAL_OK) return HAL_ERROR;
+    return Soft_I2C_ReadReg_Checked(ICM20948_ADDR, reg, val);
+}
+
+void ICM20948_EnableLatchedDataReadyInterrupt_Debug(void)
+{
+    ICM_SelectBank(0);
+
+    /*
+     * INT_PIN_CFG = 0xE0
+     * bit7 INT1_ACTL = 1: active low
+     * bit6 INT1_OPEN = 1: open drain
+     * bit5 INT1_LATCH_EN = 1: latch until status cleared
+     */
+    Soft_I2C_WriteReg(ICM20948_ADDR, 0x0F, 0xE0);
+
+    ICM20948_ClearInterruptStatus();
+
+    /*
+     * INT_ENABLE_1 bit0 = RAW_DATA_0_RDY_EN
+     */
+    Soft_I2C_WriteReg(ICM20948_ADDR, 0x11, 0x01);
 }
 
 uint8_t ICM20948_ReadAccelGyroRaw(int16_t *ax, int16_t *ay, int16_t *az,

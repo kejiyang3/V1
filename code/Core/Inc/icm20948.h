@@ -14,6 +14,9 @@
 #define ICM20948_ADDR_7BIT  0x68
 #define ICM20948_ADDR       ICM20948_ADDR_7BIT
 
+/* 编译开关: 磁力计 AK09916 + I2C Master 使能 (当前关，先验证 6 轴) */
+#define ICM20948_ENABLE_MAG_MASTER 0
+
 // 核心寄存器定义 (Bank 0)
 #define REG_BANK_SEL        0x7F
 #define REG_WHO_AM_I        0x00
@@ -48,6 +51,10 @@ uint8_t ICM20948_Read_Data(void);
 uint8_t ICM20948_DataReady(void);
 void ICM20948_ClearInterruptStatus(void);
 void ICM20948_EnableDataReadyInterrupt(void);
+void ICM20948_DisableDataReadyInterrupt(void);
+uint8_t ICM20948_ReadBank0Reg_Debug(uint8_t reg);
+HAL_StatusTypeDef ICM20948_ReadBank0Reg_Checked(uint8_t reg, uint8_t *val);
+void ICM20948_EnableLatchedDataReadyInterrupt_Debug(void);
 uint8_t ICM20948_ReadAccelGyroRaw(int16_t *ax, int16_t *ay, int16_t *az,
                                   int16_t *gx, int16_t *gy, int16_t *gz);
 void Soft_I2C_ReadBytes(uint8_t dev_addr, uint8_t reg, uint8_t *buf, uint8_t len);

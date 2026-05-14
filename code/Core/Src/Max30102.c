@@ -250,3 +250,28 @@ uint8_t MAX30102_ReadFIFO_Batch(uint32_t *ir_buf, uint32_t *red_buf, uint8_t max
     }
     return (uint8_t)num_avail;
 }
+
+ErrorStatus MAX30102_EnableFifoAlmostFullInterrupt(void)
+{
+    /* 清 pending */
+    uint8_t s1, s2;
+    MAX30102_ClearInterruptStatus(&s1, &s2);
+
+    /* 使能 A_FULL 中断 */
+    if (_write_reg(INTERRUPT_ENABLE1, 0x80) != SUCCESS) return ERROR;
+    if (_write_reg(INTERRUPT_ENABLE2, 0x00) != SUCCESS) return ERROR;
+
+    /* 再次清 pending */
+    MAX30102_ClearInterruptStatus(&s1, &s2);
+
+    return SUCCESS;
+}
+
+ErrorStatus MAX30102_DisableInterrupts(void)
+{
+    uint8_t s1, s2;
+    if (_write_reg(INTERRUPT_ENABLE1, 0x00) != SUCCESS) return ERROR;
+    if (_write_reg(INTERRUPT_ENABLE2, 0x00) != SUCCESS) return ERROR;
+    MAX30102_ClearInterruptStatus(&s1, &s2);
+    return SUCCESS;
+}

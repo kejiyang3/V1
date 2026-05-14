@@ -91,7 +91,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/Core/Src/icm20948.c
     ${CMAKE_SOURCE_DIR}/Core/Src/multi_sensor_logger.c
     ${CMAKE_SOURCE_DIR}/Core/Src/ecg_record_control.c
-    ${CMAKE_SOURCE_DIR}/Core/Src/ecg_sd_logger.c
     ${CMAKE_SOURCE_DIR}/Core/Src/ecg_usb_dump.c
     ${CMAKE_SOURCE_DIR}/Core/Src/sd_debug_log.c
     ${CMAKE_SOURCE_DIR}/App/LVGL/app_lvgl.c
