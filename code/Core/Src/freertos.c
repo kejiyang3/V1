@@ -18,7 +18,6 @@
 #include "max3003.h"
 #include "max30102.h"
 #include "icm20948.h"
-#include "i2c.h"
 #include "usbd_cdc_if.h"
 #include "usbd_core.h"
 #include "ecg_record_control.h"
@@ -228,40 +227,37 @@ void StartTask_Sensor(void *argument)
 
   APP_USB_LOG("[ECG_V1] Sensor task started\r\n");
 
-  MAX30003_Init();
-
-  /* 初始读取电极状态 */
-  MAX30003_PollLeadStatus();
-
-  SD_DebugLog_WriteLine("MAX30003_INIT_DONE");
-  Safe_USB_Printf("[SYS] MAX30003 init done\r\n");
-
-  /* I2C3 设备探测 (一次性) */
-  {
-      HAL_StatusTypeDef ppg = HAL_I2C_IsDeviceReady(&hi2c3, MAX30102_I2C_ADDR, 2, 50);
-      HAL_StatusTypeDef imu = HAL_I2C_IsDeviceReady(&hi2c3, ICM20948_ADDR_7BIT << 1, 2, 50);
-      SD_DebugLog_WriteEvent("I2C3_PROBE_PPG", (ppg == HAL_OK) ? 1 : 0);
-      SD_DebugLog_WriteEvent("I2C3_PROBE_IMU", (imu == HAL_OK) ? 1 : 0);
-      Safe_USB_Printf("[I2C3] PPG=%s IMU=%s\r\n",
-                      (ppg == HAL_OK) ? "OK" : "FAIL",
-                      (imu == HAL_OK) ? "OK" : "FAIL");
-  }
-
-  /* MAX30102 初始化 (有限重试，失败不影响 ICM) */
-  SD_DebugLog_WriteLine("MAX30102_INIT_BEGIN");
+  /* I2C3 传感器一次性初始化 (失败不影响 ECG) */
   MAX30102_InitResult_t ppg_ret = MAX30102_Init();
-  switch (ppg_ret) {
-      case MAX30102_INIT_OK:         SD_DebugLog_WriteLine("MAX30102_INIT_OK"); break;
-      case MAX30102_INIT_NOT_FOUND:  SD_DebugLog_WriteLine("MAX30102_INIT_NOT_FOUND"); break;
-      default:                       SD_DebugLog_WriteLine("MAX30102_INIT_CONFIG_FAILED"); break;
-  }
-  Safe_USB_Printf("[SYS] MAX30102 result=%d\r\n", ppg_ret);
+  uint8_t icm_ret = ICM20948_Init();
 
-  /* ICM20948 初始化 (无论 MAX30102 结果如何都执行) */
-  SD_DebugLog_WriteLine("ICM20948_INIT_BEGIN");
-  uint8_t imu_ret = ICM20948_Init();
-  SD_DebugLog_WriteEvent("ICM20948_INIT_RESULT", imu_ret);
-  Safe_USB_Printf("[SYS] ICM20948 result=%d\r\n", imu_ret);
+  Safe_USB_Printf("\r\n[SENSOR_INIT]\r\n");
+  if (ppg_ret == MAX30102_INIT_OK)
+      Safe_USB_Printf("[MAX30102] I2C CALL OK, INIT OK\r\n");
+  else if (ppg_ret == MAX30102_INIT_NOT_FOUND)
+      Safe_USB_Printf("[MAX30102] I2C CALL FAIL, DEVICE NOT FOUND\r\n");
+  else if (ppg_ret == MAX30102_INIT_CONFIG_FAILED)
+      Safe_USB_Printf("[MAX30102] I2C CALL OK BUT CONFIG FAILED\r\n");
+  else
+      Safe_USB_Printf("[MAX30102] UNKNOWN INIT RESULT=%d\r\n", (int)ppg_ret);
+
+  if (icm_ret == 0)
+      Safe_USB_Printf("[ICM20948] I2C CALL OK, WHO_AM_I OK, INIT OK\r\n");
+  else
+      Safe_USB_Printf("[ICM20948] I2C CALL FAIL OR WHO_AM_I MISMATCH, RET=%u\r\n", (unsigned int)icm_ret);
+  Safe_USB_Printf("[/SENSOR_INIT]\r\n");
+
+  if (ppg_ret == MAX30102_INIT_OK)          SD_DebugLog_WriteLine("MAX30102_INIT_OK");
+  else if (ppg_ret == MAX30102_INIT_NOT_FOUND) SD_DebugLog_WriteLine("MAX30102_INIT_NOT_FOUND");
+  else                                       SD_DebugLog_WriteLine("MAX30102_INIT_CONFIG_FAILED");
+
+  if (icm_ret == 0) SD_DebugLog_WriteLine("ICM20948_INIT_OK");
+  else              SD_DebugLog_WriteLine("ICM20948_INIT_FAILED");
+
+  /* ECG 初始化照旧，不受 PPG/ICM 影响 */
+  MAX30003_Init();
+  MAX30003_PollLeadStatus();
+  SD_DebugLog_WriteLine("MAX30003_INIT_DONE");
 
   /* 初始不采集 */
   ecg_streaming = 0;

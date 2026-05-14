@@ -1,6 +1,5 @@
 #include "icm20948.h"
 #include "gpio.h"
-#include "usb_printf.h"
 extern void Safe_USB_Printf(const char *format, ...);
 
 IMU_Data_t imu_data = {0};
@@ -38,22 +37,19 @@ static void ICM_SelectBank(uint8_t bank) {
 uint8_t ICM20948_Init(void) {
     HAL_Delay(10);
 
-    /* CRITICAL: Verify I2C address is 8-bit (with R/W bit) not 7-bit
-       ICM20948_ADDR must be: 0xD0 (0x68 << 1), NOT 0x68
-       If communication fails with WHO_AM_I, check icm20948.h:
-         #define ICM20948_ADDR (ICM20948_ADDR_7BIT << 1)  [CORRECT]
-       NOT:
-         #define ICM20948_ADDR 0x68  [WRONG - missing left shift]
-    */
+    /*
+     * Address convention in this project:
+     * - ICM20948_ADDR is stored as 7-bit address 0x68.
+     * - Soft_I2C_ReadReg / Soft_I2C_WriteReg shift it left by 1
+     *   when passing the address to STM32 HAL.
+     * - Do not redefine ICM20948_ADDR as 0xD0, otherwise it will be shifted twice.
+     */
 
     ICM_SelectBank(0);
     uint8_t who_am_i = Soft_I2C_ReadReg(ICM20948_ADDR, REG_WHO_AM_I);
-    usb_printf("[ICM] WHO_AM_I = 0x%02X (expected 0xEA)\r\n", who_am_i);
     if (who_am_i != 0xEA) {
-        usb_printf("[ICM] ERROR: WHO_AM_I mismatch, sensor not responding\r\n");
         return 1;
     }
-    usb_printf("[ICM] Device detected OK\r\n");
 
     // 1. 唤醒并复位
     Soft_I2C_WriteReg(ICM20948_ADDR, REG_PWR_MGMT_1, 0x80); 

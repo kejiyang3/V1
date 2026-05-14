@@ -3,7 +3,6 @@
 #include "i2c.h"
 #include <stdio.h>
 #include "usart.h"
-#include "usb_printf.h"
 
 extern I2C_HandleTypeDef hi2c3;
 
@@ -68,10 +67,8 @@ MAX30102_InitResult_t MAX30102_Init(void)
         HAL_Delay(50);
     }
     if (!found) {
-        usb_printf("[MAX30102] device not found\r\n");
         return MAX30102_INIT_NOT_FOUND;
     }
-    usb_printf("[MAX30102] device detected\r\n");
 
     /* Step 2: 清上电中断 */
     _read_regs(INTERRUPT_STATUS1, &data1, 1);
@@ -127,7 +124,6 @@ MAX30102_InitResult_t MAX30102_Init(void)
     _read_regs(INTERRUPT_STATUS1, &data1, 1);
     _read_regs(INTERRUPT_STATUS2, &data2, 1);
 
-    usb_printf("[MAX30102] init OK\r\n");
     return MAX30102_INIT_OK;
 }
 
