@@ -396,35 +396,45 @@ void StartTask_Sensor(void *argument)
       SD_DebugLog_WriteSnapshot();
     }
 
-    /* MAX30102 中断/FIFO 寄存器诊断 — 每秒读一次 I2C */
+    /* MAX30102 中断/FIFO 诊断 — 每秒一次短 USB 打印 */
     static uint32_t last_ppg_reg = 0;
     if (HAL_GetTick() - last_ppg_reg >= 1000) {
       last_ppg_reg = HAL_GetTick();
-      uint8_t v;
+      uint8_t ie1 = 0xEE, is1 = 0xEE, wr = 0xEE, rd = 0xEE, ov = 0xEE, mode = 0xEE;
 
       /*
-       * NOTE: 读取 INTERRUPT_STATUS1 会清除对应中断状态，
-       * 这里仅用于调试定位，每秒读一次。
-       * 正式中断采集版本不应在无关位置频繁读取 STATUS1。
+       * NOTE: 读取 INTERRUPT_STATUS1 会清除对应中断状态。
+       * 当前仅用于低频调试 MAX30102 是否产生 A_FULL 状态。
+       * 后续正式中断采集版本中，应避免在非事件处理处频繁读取 STATUS1。
        */
 
-      if (MAX30102_ReadBuffer(INTERRUPT_ENABLE1, &v, 1) == SUCCESS)
-          g_ppg_ie1 = v;
+      (void)MAX30102_ReadBuffer(INTERRUPT_ENABLE1, &ie1, 1);
+      (void)MAX30102_ReadBuffer(INTERRUPT_STATUS1, &is1, 1);
+      (void)MAX30102_ReadBuffer(FIFO_WR_POINTER,  &wr, 1);
+      (void)MAX30102_ReadBuffer(FIFO_RD_POINTER,  &rd, 1);
+      (void)MAX30102_ReadBuffer(FIFO_OV_COUNTER,  &ov, 1);
+      (void)MAX30102_ReadBuffer(MODE_CONFIGURATION, &mode, 1);
 
-      if (MAX30102_ReadBuffer(INTERRUPT_STATUS1, &v, 1) == SUCCESS)
-          g_ppg_is1 = v;
+      wr   &= 0x1F;
+      rd   &= 0x1F;
+      ov   &= 0x1F;
 
-      if (MAX30102_ReadBuffer(FIFO_WR_POINTER, &v, 1) == SUCCESS)
-          g_ppg_fifo_wr = v & 0x1F;
+      GPIO_PinState ppg_pin = HAL_GPIO_ReadPin(PPG_INT_GPIO_Port, PPG_INT_Pin);
+      char pin_ch = (ppg_pin == GPIO_PIN_SET) ? 'H' : 'L';
 
-      if (MAX30102_ReadBuffer(FIFO_RD_POINTER, &v, 1) == SUCCESS)
-          g_ppg_fifo_rd = v & 0x1F;
+      extern volatile uint32_t ppg_irq_count;
+      Safe_USB_Printf(
+          "[PPG_D] irq=%lu pin=%c ie1=%02X is1=%02X wr=%02X rd=%02X ov=%02X mode=%02X\r\n",
+          (unsigned long)ppg_irq_count, pin_ch,
+          ie1, is1, wr, rd, ov, mode);
 
-      if (MAX30102_ReadBuffer(FIFO_OV_COUNTER, &v, 1) == SUCCESS)
-          g_ppg_fifo_ov = v & 0x1F;
-
-      if (MAX30102_ReadBuffer(MODE_CONFIGURATION, &v, 1) == SUCCESS)
-          g_ppg_mode = v;
+      /* 同步更新 LCD 全局变量 */
+      g_ppg_ie1     = ie1;
+      g_ppg_is1     = is1;
+      g_ppg_fifo_wr = wr;
+      g_ppg_fifo_rd = rd;
+      g_ppg_fifo_ov = ov;
+      g_ppg_mode    = mode;
     }
   }
   /* USER CODE END StartTask_Sensor */
