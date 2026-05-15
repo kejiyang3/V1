@@ -387,6 +387,18 @@ void StartTask_Sensor(void *argument)
       g_ecg_rec.request_save_info = 0;
       SD_DebugLog_WriteSnapshot();
     }
+
+    /* PPG 中断状态监测 — 每秒打印 irq_count + 引脚电平 */
+    static uint32_t last_ppg_mon = 0;
+    if (HAL_GetTick() - last_ppg_mon >= 1000) {
+      last_ppg_mon = HAL_GetTick();
+      GPIO_PinState ppg_pin =
+          HAL_GPIO_ReadPin(PPG_INT_GPIO_Port, PPG_INT_Pin);
+      extern volatile uint32_t ppg_irq_count;
+      Safe_USB_Printf("[PPG_IRQ_MON] irq_count=%lu, int_pin=%s\r\n",
+                      (unsigned long)ppg_irq_count,
+                      (ppg_pin == GPIO_PIN_SET) ? "HIGH" : "LOW");
+    }
   }
   /* USER CODE END StartTask_Sensor */
 }

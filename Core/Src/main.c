@@ -131,13 +131,13 @@ static void ICM_INT_Line_Pulldown_Test_With_ICM_Release(void)
     /* ICM 释放后延时，确保 INT1 线路稳定 */
     HAL_Delay(100);
 
-    /* === 阶段 2: 重配 ICM_INT (PC2) 为开漏输出，开始线路测试 === */
+    /* === 阶段 2: 重配 PH1 为开漏输出，开始线路测试 === */
 
-    /* 禁用 EXTI2，清 pending */
-    HAL_NVIC_DisableIRQ(EXTI2_IRQn);
+    /* 禁用 EXTI1，清 pending */
+    HAL_NVIC_DisableIRQ(EXTI1_IRQn);
     __HAL_GPIO_EXTI_CLEAR_IT(ICM_INT_Pin);
 
-    /* 重配 PC2 = 开漏输出 + 上拉 */
+    /* 重配 PH1 = 开漏输出 + 上拉 */
     HAL_GPIO_DeInit(ICM_INT_GPIO_Port, ICM_INT_Pin);
 
     GPIO_InitStruct.Pin   = ICM_INT_Pin;
@@ -207,15 +207,15 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+#if ICM_INT_LINE_PULLDOWN_TEST_ENABLE
+  ICM_INT_Line_Pulldown_Test();
+#endif
   MX_DMA_Init();
   MX_SDMMC1_SD_Init();
   MX_SAI1_Init();
   MX_FATFS_Init();
   MX_I2C2_Init();
   MX_I2C3_Init();
-#if ICM_INT_LINE_PULLDOWN_TEST_ENABLE
-  ICM_INT_Line_Pulldown_Test_With_ICM_Release();
-#endif
   MX_USART1_UART_Init();
   MX_TIM3_Init();
   MX_SPI3_Init();
@@ -373,17 +373,16 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
       vTaskNotifyGiveFromISR(EcgTaskHandle, &xHigherPriorityTaskWoken);
     }
   }
+  else if (GPIO_Pin == PPG_INT_Pin) {
+    ppg_irq_count++;
+    if (PpgTaskHandle != NULL) {
+      vTaskNotifyGiveFromISR(PpgTaskHandle, &xHigherPriorityTaskWoken);
+    }
+  }
   else if (GPIO_Pin == ICM_INT_Pin) {
     icm_irq_count++;
     if (ImuTaskHandle != NULL) {
       vTaskNotifyGiveFromISR(ImuTaskHandle, &xHigherPriorityTaskWoken);
-    }
-  }
-  else if (GPIO_Pin == PPG_INT_Pin) {
-    extern volatile uint32_t ppg_irq_count;
-    ppg_irq_count++;
-    if (PpgTaskHandle != NULL) {
-      vTaskNotifyGiveFromISR(PpgTaskHandle, &xHigherPriorityTaskWoken);
     }
   }
 
