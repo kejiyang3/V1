@@ -145,6 +145,12 @@ const osThreadAttr_t Task_ECG_USBDump_attributes = {
   .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
+/* Definitions for Task_PPGDiagWriter */
+const osThreadAttr_t Task_PPGDiagWriter_attributes = {
+  .name = "Task_PPGDiagWr",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal7,
+};
 /* Definitions for Mtx_SDCard */
 osMutexId_t Mtx_SDCardHandle;
 const osMutexAttr_t Mtx_SDCard_attributes = {
@@ -218,7 +224,7 @@ void MX_FREERTOS_Init(void) {
   if (Task_MultiSensor_SDWriterHandle == NULL) g_task_create_error |= (1UL << 2);
 
   /* PPG INT 诊断 SD Writer */
-  osThreadNew(StartTask_PPGDiagWriter, NULL, NULL);
+  osThreadNew(StartTask_PPGDiagWriter, NULL, &Task_PPGDiagWriter_attributes);
 
   /* USB Dump Task — V1 不创建 */
   /* USER CODE END RTOS_THREADS */
