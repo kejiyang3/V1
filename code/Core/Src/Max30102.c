@@ -224,8 +224,13 @@ uint8_t MAX30102_ReadFIFO_Batch(uint32_t *ir_buf, uint32_t *red_buf, uint8_t max
 {
     uint8_t status, wr_ptr, rd_ptr, ov_counter;
 
-    if (_read_regs(INTERRUPT_STATUS1, &status, 1) != SUCCESS) return 0;
-    if ((status & 0x80) == 0) return 0;
+    /* 读取 INTERRUPT_STATUS1 以释放 MAX30102 INT 引脚 */
+    if (_read_regs(INTERRUPT_STATUS1, &status, 1) != SUCCESS) {
+        status = 0;
+    }
+    /* NOTE: 不再因 A_FULL bit 未置位就直接 return 0。
+     * 即使 status & 0x80 == 0，仍继续根据 FIFO 指针判断是否有数据。
+     * 原因：A_FULL 可能因溢出/时序原因不置位，但 FIFO 中仍有样本。 */
 
     _read_regs(FIFO_WR_POINTER, &wr_ptr, 1);
     _read_regs(FIFO_OV_COUNTER, &ov_counter, 1);

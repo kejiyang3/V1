@@ -53,6 +53,7 @@ extern DMA_HandleTypeDef hdma_usart1_rx;  /* Defined in usart.c for USART1 RX DM
 volatile uint8_t ecg_streaming = 0;             /* ECG流使能标志 */
 volatile uint32_t ecg_irq_count = 0;             /* ECG INTB 中断计数 */
 volatile uint32_t icm_irq_count = 0;             /* ICM INT1 中断计数 */
+volatile uint32_t ppg_irq_count = 0;             /* PPG A_FULL 中断计数 */
 
 /* EcgTask handle (定义在 freertos.c) — 用于ISR→Task直接通知 */
 extern TaskHandle_t EcgTaskHandle;
@@ -379,6 +380,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     }
   }
   else if (GPIO_Pin == PPG_INT_Pin) {
+    extern volatile uint32_t ppg_irq_count;
+    ppg_irq_count++;
     if (PpgTaskHandle != NULL) {
       vTaskNotifyGiveFromISR(PpgTaskHandle, &xHigherPriorityTaskWoken);
     }

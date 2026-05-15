@@ -399,6 +399,12 @@ void StartTask_PPG(void *argument)
   (void)argument;
   PpgTaskHandle = xTaskGetCurrentTaskHandle();
 
+  static uint32_t ppg_seq = 0;
+  static uint32_t last_heartbeat = 0;
+  extern volatile uint32_t ppg_irq_count;
+
+  Safe_USB_Printf("[PPG] interrupt-driven USB stream ready\r\n");
+
   for (;;) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
@@ -412,7 +418,25 @@ void StartTask_PPG(void *argument)
     uint8_t n = MAX30102_ReadFIFO_Batch(ir_buf, red_buf, 32);
 
     for (uint8_t i = 0; i < n; i++) {
-      MultiSensorLogger_AddPPG(ir_buf[i], red_buf[i]);
+      Safe_USB_Printf("PPG,%lu,%lu,%lu,%lu\r\n",
+                      ppg_seq++,
+                      HAL_GetTick(),
+                      ir_buf[i],
+                      red_buf[i]);
+
+      /*
+       * 暂时注释 SD 写入以保证 USB 实时打印稳定性。
+       * SD 写入可后续恢复: MultiSensorLogger_AddPPG(ir_buf[i], red_buf[i]);
+       */
+    }
+
+    /* 每秒心跳 (不在数据行中混入日志) */
+    if (HAL_GetTick() - last_heartbeat >= 1000) {
+      last_heartbeat = HAL_GetTick();
+      char hb[48];
+      snprintf(hb, sizeof(hb), "PPG_ALIVE,irq=%lu,seq=%lu",
+               (unsigned long)ppg_irq_count, (unsigned long)ppg_seq);
+      SD_DebugLog_WriteLine(hb);
     }
   }
   /* USER CODE END StartTask_PPG */
