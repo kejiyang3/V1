@@ -67,10 +67,10 @@ extern volatile uint8_t ecg_streaming;
 /* Private defines -----------------------------------------------------------*/
 #define ECG_CS_Pin GPIO_PIN_13
 #define ECG_CS_GPIO_Port GPIOC
-#define ICM_INT_Pin GPIO_PIN_1
-#define ICM_INT_GPIO_Port GPIOH
-#define PPG_INT_Pin GPIO_PIN_2
-#define PPG_INT_GPIO_Port GPIOC
+#define PPG_INT_Pin GPIO_PIN_1
+#define PPG_INT_GPIO_Port GPIOH
+#define ICM_INT_Pin GPIO_PIN_2
+#define ICM_INT_GPIO_Port GPIOC
 #define KEY_BTN_Pin GPIO_PIN_1
 #define KEY_BTN_GPIO_Port GPIOA
 #define LCD_RST_Pin GPIO_PIN_2

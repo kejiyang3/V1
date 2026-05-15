@@ -72,17 +72,17 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(ECG_CS_GPIO_Port, &GPIO_InitStruct);
 
-  /* ICM_INT_Pin — EXTI 下降沿，用于 ICM20948 Data Ready */
-  GPIO_InitStruct.Pin = ICM_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(ICM_INT_GPIO_Port, &GPIO_InitStruct);
-
-  /* PPG_INT_Pin — EXTI 下降沿，用于 MAX30102 FIFO Almost Full */
+  /* PPG_INT_Pin (PH1) — EXTI 下降沿，用于 MAX30102 FIFO Almost Full */
   GPIO_InitStruct.Pin = PPG_INT_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(PPG_INT_GPIO_Port, &GPIO_InitStruct);
+
+  /* ICM_INT_Pin (PC2) — EXTI 下降沿，用于 ICM20948 Data Ready */
+  GPIO_InitStruct.Pin = ICM_INT_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(ICM_INT_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : KEY_BTN_Pin */
   GPIO_InitStruct.Pin = KEY_BTN_Pin;

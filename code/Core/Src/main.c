@@ -23,6 +23,7 @@
 #include "usbd_cdc_if.h"
 #include "max3003.h"
 #include "ecg_record_control.h"
+#include "icm20948.h"
 #include "usb_device.h"
 /* USER CODE END Includes */
 
@@ -68,6 +69,96 @@ void MX_FREERTOS_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+#if ICM_INT_LINE_PULLDOWN_TEST_ENABLE
+/**
+  * @brief  ICM_INT 线路拉低测试 — 先通过 I2C3 释放 ICM20948 INT1，再测线路
+  * @note   1. I2C3 访问 ICM20948，禁用所有中断，清除锁存状态，软复位
+  *         2. 重配 PH1 为开漏输出
+  *         3. 循环 3s LOW / 3s RELEASE
+  *         阻塞式运行，在 MX_I2C3_Init() 后进入。
+  */
+static void ICM_INT_Line_Pulldown_Test_With_ICM_Release(void)
+{
+    extern I2C_HandleTypeDef hi2c3;
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    HAL_StatusTypeDef s;
+    uint8_t val;
+    uint8_t addr8;
+
+    /* === 阶段 1: 通过 I2C3 释放 ICM20948 INT1 === */
+    addr8 = (uint8_t)(ICM20948_ADDR << 1);
+
+    /* 选 Bank 0 */
+    val = 0x00;
+    HAL_I2C_Mem_Write(&hi2c3, addr8, REG_BANK_SEL,
+                      I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+
+    /* 读 WHO_AM_I 确认 ICM 可达 */
+    s = HAL_I2C_Mem_Read(&hi2c3, addr8, REG_WHO_AM_I,
+                         I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+
+    if (s == HAL_OK && val == 0xEA) {
+        /* a. 禁用所有中断使能 */
+        val = 0x00;
+        HAL_I2C_Mem_Write(&hi2c3, addr8, 0x10, I2C_MEMADD_SIZE_8BIT, &val, 1, 100); // INT_ENABLE
+        HAL_I2C_Mem_Write(&hi2c3, addr8, 0x11, I2C_MEMADD_SIZE_8BIT, &val, 1, 100); // INT_ENABLE_1
+        HAL_I2C_Mem_Write(&hi2c3, addr8, 0x12, I2C_MEMADD_SIZE_8BIT, &val, 1, 100); // INT_ENABLE_2
+        HAL_I2C_Mem_Write(&hi2c3, addr8, 0x13, I2C_MEMADD_SIZE_8BIT, &val, 1, 100); // INT_ENABLE_3
+
+        /* b. 读全部 INT_STATUS 清除锁存中断 */
+        HAL_I2C_Mem_Read(&hi2c3, addr8, 0x19, I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+        HAL_I2C_Mem_Read(&hi2c3, addr8, 0x1A, I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+        HAL_I2C_Mem_Read(&hi2c3, addr8, 0x1B, I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+        HAL_I2C_Mem_Read(&hi2c3, addr8, 0x1C, I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+
+        /* c. INT_PIN_CFG = 0x00，释放 INT1 引脚控制 */
+        val = 0x00;
+        HAL_I2C_Mem_Write(&hi2c3, addr8, REG_INT_PIN_CFG,
+                          I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+
+        /* d. 软件复位 ICM，清除所有内部状态 */
+        val = 0x80;
+        HAL_I2C_Mem_Write(&hi2c3, addr8, REG_PWR_MGMT_1,
+                          I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+        HAL_Delay(50);
+        val = 0x01;  // 唤醒
+        HAL_I2C_Mem_Write(&hi2c3, addr8, REG_PWR_MGMT_1,
+                          I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+    }
+
+    /* ICM 释放后延时，确保 INT1 线路稳定 */
+    HAL_Delay(100);
+
+    /* === 阶段 2: 重配 ICM_INT (PC2) 为开漏输出，开始线路测试 === */
+
+    /* 禁用 EXTI2，清 pending */
+    HAL_NVIC_DisableIRQ(EXTI2_IRQn);
+    __HAL_GPIO_EXTI_CLEAR_IT(ICM_INT_Pin);
+
+    /* 重配 PC2 = 开漏输出 + 上拉 */
+    HAL_GPIO_DeInit(ICM_INT_GPIO_Port, ICM_INT_Pin);
+
+    GPIO_InitStruct.Pin   = ICM_INT_Pin;
+    GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_OD;
+    GPIO_InitStruct.Pull  = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(ICM_INT_GPIO_Port, &GPIO_InitStruct);
+
+    /* 初始释放为高阻 */
+    HAL_GPIO_WritePin(ICM_INT_GPIO_Port, ICM_INT_Pin, GPIO_PIN_SET);
+    HAL_Delay(1000);
+
+    /* 循环: LOW 3s → RELEASE 3s */
+    while (1) {
+        HAL_GPIO_WritePin(ICM_INT_GPIO_Port, ICM_INT_Pin, GPIO_PIN_RESET);
+        HAL_Delay(3000);
+        HAL_GPIO_WritePin(ICM_INT_GPIO_Port, ICM_INT_Pin, GPIO_PIN_SET);
+        HAL_Delay(3000);
+    }
+}
+#endif /* ICM_INT_LINE_PULLDOWN_TEST_ENABLE */
+
 static void ECG_FCLK_MCO_ForceInit(void)
 {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
@@ -121,6 +212,9 @@ int main(void)
   MX_FATFS_Init();
   MX_I2C2_Init();
   MX_I2C3_Init();
+#if ICM_INT_LINE_PULLDOWN_TEST_ENABLE
+  ICM_INT_Line_Pulldown_Test_With_ICM_Release();
+#endif
   MX_USART1_UART_Init();
   MX_TIM3_Init();
   MX_SPI3_Init();
@@ -278,15 +372,15 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
       vTaskNotifyGiveFromISR(EcgTaskHandle, &xHigherPriorityTaskWoken);
     }
   }
-  else if (GPIO_Pin == PPG_INT_Pin) {
-    if (PpgTaskHandle != NULL) {
-      vTaskNotifyGiveFromISR(PpgTaskHandle, &xHigherPriorityTaskWoken);
-    }
-  }
   else if (GPIO_Pin == ICM_INT_Pin) {
     icm_irq_count++;
     if (ImuTaskHandle != NULL) {
       vTaskNotifyGiveFromISR(ImuTaskHandle, &xHigherPriorityTaskWoken);
+    }
+  }
+  else if (GPIO_Pin == PPG_INT_Pin) {
+    if (PpgTaskHandle != NULL) {
+      vTaskNotifyGiveFromISR(PpgTaskHandle, &xHigherPriorityTaskWoken);
     }
   }
 
