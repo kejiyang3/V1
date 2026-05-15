@@ -400,7 +400,8 @@ void StartTask_Sensor(void *argument)
     static uint32_t last_ppg_reg = 0;
     if (HAL_GetTick() - last_ppg_reg >= 1000) {
       last_ppg_reg = HAL_GetTick();
-      uint8_t ie1 = 0xEE, is1 = 0xEE, wr = 0xEE, rd = 0xEE, ov = 0xEE, mode = 0xEE;
+      uint8_t ie1 = 0xEE, is1 = 0xEE, fifo_cfg = 0xEE;
+      uint8_t wr = 0xEE, rd = 0xEE, ov = 0xEE, mode = 0xEE;
 
       /*
        * NOTE: 读取 INTERRUPT_STATUS1 会清除对应中断状态。
@@ -408,12 +409,13 @@ void StartTask_Sensor(void *argument)
        * 后续正式中断采集版本中，应避免在非事件处理处频繁读取 STATUS1。
        */
 
-      (void)MAX30102_ReadBuffer(INTERRUPT_ENABLE1, &ie1, 1);
-      (void)MAX30102_ReadBuffer(INTERRUPT_STATUS1, &is1, 1);
-      (void)MAX30102_ReadBuffer(FIFO_WR_POINTER,  &wr, 1);
-      (void)MAX30102_ReadBuffer(FIFO_RD_POINTER,  &rd, 1);
-      (void)MAX30102_ReadBuffer(FIFO_OV_COUNTER,  &ov, 1);
-      (void)MAX30102_ReadBuffer(MODE_CONFIGURATION, &mode, 1);
+      (void)MAX30102_ReadBuffer(INTERRUPT_ENABLE1,     &ie1, 1);
+      (void)MAX30102_ReadBuffer(INTERRUPT_STATUS1,     &is1, 1);
+      (void)MAX30102_ReadBuffer(FIFO_CONFIGURATION,    &fifo_cfg, 1);
+      (void)MAX30102_ReadBuffer(FIFO_WR_POINTER,       &wr, 1);
+      (void)MAX30102_ReadBuffer(FIFO_RD_POINTER,       &rd, 1);
+      (void)MAX30102_ReadBuffer(FIFO_OV_COUNTER,       &ov, 1);
+      (void)MAX30102_ReadBuffer(MODE_CONFIGURATION,    &mode, 1);
 
       wr   &= 0x1F;
       rd   &= 0x1F;
@@ -424,9 +426,9 @@ void StartTask_Sensor(void *argument)
 
       extern volatile uint32_t ppg_irq_count;
       Safe_USB_Printf(
-          "[PPG_D] irq=%lu pin=%c ie1=%02X is1=%02X wr=%02X rd=%02X ov=%02X mode=%02X\r\n",
+          "[PPG_D] irq=%lu pin=%c ie1=%02X is1=%02X fifo=%02X wr=%02X rd=%02X ov=%02X mode=%02X\r\n",
           (unsigned long)ppg_irq_count, pin_ch,
-          ie1, is1, wr, rd, ov, mode);
+          ie1, is1, fifo_cfg, wr, rd, ov, mode);
 
       /* 同步更新 LCD 全局变量 */
       g_ppg_ie1     = ie1;
