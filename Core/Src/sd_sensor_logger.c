@@ -2,6 +2,8 @@
 #include "fatfs.h"
 #include "ff.h"
 #include "usb_printf.h"
+#include "sd_debug_log.h"
+#include "ecg_record_control.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -156,12 +158,14 @@ void StartTask_SDWriter(void *argument)
  * ================================================================ */
 #define PPG_DIAG_QUEUE_DEPTH       256
 #define PPG_DIAG_FILE_PATH         "0:/ppg_int_diag.csv"
-#define PPG_DIAG_SYNC_EVERY        128
+#define PPG_DIAG_SYNC_EVERY        8
 
 static osMessageQueueId_t Q_PPGDiagHandle = NULL;
 static FIL s_ppg_diag_file;
 static uint32_t s_ppg_diag_written = 0;
 static uint32_t s_ppg_diag_dropped = 0;
+static uint32_t s_ppg_diag_write_fail = 0;
+static uint32_t s_ppg_diag_sync_count = 0;
 
 void PPGDiag_InitQueue(void)
 {
@@ -227,7 +231,7 @@ void StartTask_PPGDiagWriter(void *argument)
     res = f_open(&s_ppg_diag_file, PPG_DIAG_FILE_PATH,
                  FA_CREATE_ALWAYS | FA_WRITE);
     if (res != FR_OK) {
-        f_mount(NULL, SDPath, 1);
+        /* 不 unmount — 主多传感器 Writer 可能持有文件 */
         if (Mtx_SDCardHandle != NULL) osMutexRelease(Mtx_SDCardHandle);
         for (;;) osDelay(1000);
     }
@@ -237,9 +241,18 @@ void StartTask_PPGDiagWriter(void *argument)
             "timestamp_ms,seq,irq_count,pin_before,status1_hex,"
             "a_full,ppg_rdy,alc_ovf,pwr_rdy,pin_after,"
             "ie1_hex,fifo_wr,fifo_rd,fifo_ov\r\n";
-        f_write(&s_ppg_diag_file, hdr, strlen(hdr), &bw);
+        UINT hdr_len = (UINT)strlen(hdr);
+        UINT hdr_bw = 0;
+        res = f_write(&s_ppg_diag_file, hdr, hdr_len, &hdr_bw);
+        if (res != FR_OK || hdr_bw != hdr_len) {
+            f_close(&s_ppg_diag_file);
+            if (Mtx_SDCardHandle != NULL) osMutexRelease(Mtx_SDCardHandle);
+            for (;;) osDelay(1000);
+        }
         f_sync(&s_ppg_diag_file);
     }
+
+    SD_DebugLog_WriteLine("PPG_DIAG_FILE_OPENED");
 
     if (Mtx_SDCardHandle != NULL) osMutexRelease(Mtx_SDCardHandle);
 
@@ -257,10 +270,21 @@ void StartTask_PPGDiagWriter(void *argument)
 
             if (res == FR_OK && bw == (UINT)n) {
                 s_ppg_diag_written++;
+            } else {
+                s_ppg_diag_write_fail++;
             }
 
-            if ((s_ppg_diag_written % PPG_DIAG_SYNC_EVERY) == 0)
+            if ((s_ppg_diag_written % PPG_DIAG_SYNC_EVERY) == 0) {
                 f_sync(&s_ppg_diag_file);
+                s_ppg_diag_sync_count++;
+            }
+
+            /* 录制停止时额外 flush */
+            if (g_ecg_rec.state == ECG_REC_STOPPING ||
+                g_ecg_rec.state == ECG_REC_STOPPED) {
+                f_sync(&s_ppg_diag_file);
+                s_ppg_diag_sync_count++;
+            }
 
             if (Mtx_SDCardHandle != NULL)
                 osMutexRelease(Mtx_SDCardHandle);
