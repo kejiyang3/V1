@@ -315,9 +315,9 @@ void StartTask_Sensor(void *argument)
   }
 
   /* ECG 初始化照旧，不受 PPG/ICM 影响 */
-  // MAX30003_Init();           /* 临时注释 — 调试 MAX30102 */
-  // MAX30003_PollLeadStatus();
-  // SD_DebugLog_WriteLine("MAX30003_INIT_DONE");
+  MAX30003_Init();
+  MAX30003_PollLeadStatus();
+  SD_DebugLog_WriteLine("MAX30003_INIT_DONE");
 
   /* 初始不采集 */
   ecg_streaming = 0;
@@ -368,7 +368,7 @@ void StartTask_Sensor(void *argument)
         ICM20948_EnableDataReadyInterrupt();
 
         ecg_streaming = 1;
-        // MAX30003_StartStream(); /* 临时注释 — 调试 MAX30102 */
+        MAX30003_StartStream();
       }
     }
 
@@ -377,7 +377,7 @@ void StartTask_Sensor(void *argument)
 
       if (g_ecg_rec.state == ECG_REC_RECORDING) {
         ecg_streaming = 0;
-        // MAX30003_StopStream(); /* 临时注释 — 调试 MAX30102 */
+        MAX30003_StopStream();
 
         MAX30102_DisableInterrupts();
         ICM20948_DisableDataReadyInterrupt();
@@ -391,17 +391,17 @@ void StartTask_Sensor(void *argument)
 
     if (ecg_streaming && g_ecg_rec.state == ECG_REC_RECORDING) {
       (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5));
-      // MAX30003_Task();        /* 临时注释 — 调试 MAX30102 */
+      MAX30003_Task();
     } else {
       osDelay(20);
     }
 
     /* 低频轮询电极状态 (4Hz)，Idle 也持续检测 */
-    // static uint32_t last_lead_poll = 0;
-    // if (HAL_GetTick() - last_lead_poll >= 250) {
-    //     last_lead_poll = HAL_GetTick();
-    //     MAX30003_PollLeadStatus();  /* 临时注释 — 调试 MAX30102 */
-    // }
+    static uint32_t last_lead_poll = 0;
+    if (HAL_GetTick() - last_lead_poll >= 250) {
+        last_lead_poll = HAL_GetTick();
+        MAX30003_PollLeadStatus();
+    }
 
     if (g_ecg_rec.request_save_info) {
       g_ecg_rec.request_save_info = 0;
