@@ -101,7 +101,7 @@ extern volatile uint8_t ecg_streaming;
 /* USER CODE BEGIN Private defines */
 
 /* ===== ICM_INT 线路拉低测试 (临时) ===== */
-#define ICM_INT_LINE_PULLDOWN_TEST_ENABLE 1
+#define ICM_INT_LINE_PULLDOWN_TEST_ENABLE 0
 
 /* ===== MAX30003 心电中断读取配置 ===== */
 #define ECG_SAMPLE_RATE_HZ          512       /* ECG采样率 */
