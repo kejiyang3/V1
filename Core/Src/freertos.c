@@ -188,6 +188,7 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_QUEUES */
   MultiSensorLogger_InitQueue();
+  PPGDiag_InitQueue();
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */

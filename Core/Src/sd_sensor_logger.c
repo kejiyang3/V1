@@ -213,8 +213,7 @@ void StartTask_PPGDiagWriter(void *argument)
     SensorRecord_t rec;
     char line[192];
 
-    osDelay(3500);
-    PPGDiag_InitQueue();
+    osDelay(500);
 
     if (Mtx_SDCardHandle != NULL)
         osMutexAcquire(Mtx_SDCardHandle, osWaitForever);
