@@ -25,6 +25,7 @@
 #include "app_log.h"
 #include "sd_debug_log.h"
 #include "multi_sensor_logger.h"
+#include "sd_sensor_logger.h"
 /* USER CODE END Includes */
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
@@ -154,6 +155,7 @@ const osMutexAttr_t Mtx_SDCard_attributes = {
 /* USER CODE BEGIN FunctionPrototypes */
 void Safe_USB_Printf(const char *format, ...);
 static void APP_ICM20948_IntFlagAndPinLevelCheck(void);
+static void APP_Log_PPG_INT_Diag_To_SD(uint32_t seq);
 /* USER CODE END FunctionPrototypes */
 
 void StartTask_LVGL(void *argument);
@@ -213,6 +215,9 @@ void MX_FREERTOS_Init(void) {
   /* 多传感器 SD Writer (取代旧的 ECG_SDWriter) */
   Task_MultiSensor_SDWriterHandle = osThreadNew(StartTask_MultiSensor_SDWriter, NULL, &Task_MultiSensor_SDWriter_attributes);
   if (Task_MultiSensor_SDWriterHandle == NULL) g_task_create_error |= (1UL << 2);
+
+  /* PPG INT 诊断 SD Writer */
+  osThreadNew(StartTask_PPGDiagWriter, NULL, NULL);
 
   /* USB Dump Task — V1 不创建 */
   /* USER CODE END RTOS_THREADS */
@@ -303,9 +308,9 @@ void StartTask_Sensor(void *argument)
   }
 
   /* ECG 初始化照旧，不受 PPG/ICM 影响 */
-  MAX30003_Init();
-  MAX30003_PollLeadStatus();
-  SD_DebugLog_WriteLine("MAX30003_INIT_DONE");
+  // MAX30003_Init();           /* 临时注释 — 调试 MAX30102 */
+  // MAX30003_PollLeadStatus();
+  // SD_DebugLog_WriteLine("MAX30003_INIT_DONE");
 
   /* 初始不采集 */
   ecg_streaming = 0;
@@ -356,7 +361,7 @@ void StartTask_Sensor(void *argument)
         ICM20948_EnableDataReadyInterrupt();
 
         ecg_streaming = 1;
-        MAX30003_StartStream();
+        // MAX30003_StartStream(); /* 临时注释 — 调试 MAX30102 */
       }
     }
 
@@ -365,7 +370,7 @@ void StartTask_Sensor(void *argument)
 
       if (g_ecg_rec.state == ECG_REC_RECORDING) {
         ecg_streaming = 0;
-        MAX30003_StopStream();
+        // MAX30003_StopStream(); /* 临时注释 — 调试 MAX30102 */
 
         MAX30102_DisableInterrupts();
         ICM20948_DisableDataReadyInterrupt();
@@ -379,64 +384,29 @@ void StartTask_Sensor(void *argument)
 
     if (ecg_streaming && g_ecg_rec.state == ECG_REC_RECORDING) {
       (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5));
-      MAX30003_Task();
+      // MAX30003_Task();        /* 临时注释 — 调试 MAX30102 */
     } else {
       osDelay(20);
     }
 
     /* 低频轮询电极状态 (4Hz)，Idle 也持续检测 */
-    static uint32_t last_lead_poll = 0;
-    if (HAL_GetTick() - last_lead_poll >= 250) {
-        last_lead_poll = HAL_GetTick();
-        MAX30003_PollLeadStatus();
-    }
+    // static uint32_t last_lead_poll = 0;
+    // if (HAL_GetTick() - last_lead_poll >= 250) {
+    //     last_lead_poll = HAL_GetTick();
+    //     MAX30003_PollLeadStatus();  /* 临时注释 — 调试 MAX30102 */
+    // }
 
     if (g_ecg_rec.request_save_info) {
       g_ecg_rec.request_save_info = 0;
       SD_DebugLog_WriteSnapshot();
     }
 
-    /* MAX30102 中断/FIFO 诊断 — 每秒一次短 USB 打印 */
-    static uint32_t last_ppg_reg = 0;
-    if (HAL_GetTick() - last_ppg_reg >= 1000) {
-      last_ppg_reg = HAL_GetTick();
-      uint8_t ie1 = 0xEE, is1 = 0xEE, fifo_cfg = 0xEE;
-      uint8_t wr = 0xEE, rd = 0xEE, ov = 0xEE, mode = 0xEE;
-
-      /*
-       * NOTE: 读取 INTERRUPT_STATUS1 会清除对应中断状态。
-       * 当前仅用于低频调试 MAX30102 是否产生 A_FULL 状态。
-       * 后续正式中断采集版本中，应避免在非事件处理处频繁读取 STATUS1。
-       */
-
-      (void)MAX30102_ReadBuffer(INTERRUPT_ENABLE1,     &ie1, 1);
-      (void)MAX30102_ReadBuffer(INTERRUPT_STATUS1,     &is1, 1);
-      (void)MAX30102_ReadBuffer(FIFO_CONFIGURATION,    &fifo_cfg, 1);
-      (void)MAX30102_ReadBuffer(FIFO_WR_POINTER,       &wr, 1);
-      (void)MAX30102_ReadBuffer(FIFO_RD_POINTER,       &rd, 1);
-      (void)MAX30102_ReadBuffer(FIFO_OV_COUNTER,       &ov, 1);
-      (void)MAX30102_ReadBuffer(MODE_CONFIGURATION,    &mode, 1);
-
-      wr   &= 0x1F;
-      rd   &= 0x1F;
-      ov   &= 0x1F;
-
-      GPIO_PinState ppg_pin = HAL_GPIO_ReadPin(PPG_INT_GPIO_Port, PPG_INT_Pin);
-      char pin_ch = (ppg_pin == GPIO_PIN_SET) ? 'H' : 'L';
-
-      extern volatile uint32_t ppg_irq_count;
-      Safe_USB_Printf(
-          "[PPG_D] irq=%lu pin=%c ie1=%02X is1=%02X fifo=%02X wr=%02X rd=%02X ov=%02X mode=%02X\r\n",
-          (unsigned long)ppg_irq_count, pin_ch,
-          ie1, is1, fifo_cfg, wr, rd, ov, mode);
-
-      /* 同步更新 LCD 全局变量 */
-      g_ppg_ie1     = ie1;
-      g_ppg_is1     = is1;
-      g_ppg_fifo_wr = wr;
-      g_ppg_fifo_rd = rd;
-      g_ppg_fifo_ov = ov;
-      g_ppg_mode    = mode;
+    /* PPG INT 诊断 SD 采集 — 每 200ms 记录一条到 ppg_int_diag.csv */
+    static uint32_t last_ppg_diag_tick = 0;
+    static uint32_t ppg_diag_seq = 0;
+    if (HAL_GetTick() - last_ppg_diag_tick >= 200) {
+      last_ppg_diag_tick = HAL_GetTick();
+      APP_Log_PPG_INT_Diag_To_SD(ppg_diag_seq++);
     }
   }
   /* USER CODE END StartTask_Sensor */
@@ -669,6 +639,55 @@ static void APP_ICM20948_IntFlagAndPinLevelCheck(void)
 
     SD_DebugLog_WriteLine("ICM_INT_FLAG_PIN_CHECK_END");
     Safe_USB_Printf("[ICM_INT_FLAG_PIN_CHECK_END]\r\n");
+}
+
+/**
+  * @brief  PPG INT 诊断采集 → SD 队列
+  * @note   150ms 周期调用。先读引脚电平 → 读 STATUS1 → 再读引脚电平。
+  *         读取 STATUS1 会清除对应中断状态（仅用于调试）。
+  */
+static void APP_Log_PPG_INT_Diag_To_SD(uint32_t seq)
+{
+    SensorRecord_t rec;
+    memset(&rec, 0, sizeof(rec));
+    rec.timestamp_ms = HAL_GetTick();
+    rec.seq = seq;
+    rec.type = SENSOR_REC_PPG_INT_DIAG;
+
+    extern volatile uint32_t ppg_irq_count;
+
+    /* 1. 先读 PPG_INT 引脚电平 */
+    GPIO_PinState s = HAL_GPIO_ReadPin(PPG_INT_GPIO_Port, PPG_INT_Pin);
+    rec.data.ppg_int_diag.pin_before = (s == GPIO_PIN_SET) ? 1 : 0;
+    rec.data.ppg_int_diag.irq_count  = ppg_irq_count;
+
+    /* 2. 读 I2C 寄存器 */
+    uint8_t ie1 = 0xEE, status1 = 0xEE, wr = 0xEE, rd = 0xEE, ov = 0xEE;
+
+    MAX30102_ReadBuffer(INTERRUPT_ENABLE1, &ie1, 1);
+
+    /*
+     * NOTE: 读取 INTERRUPT_STATUS1 会清除对应中断状态并释放 INT 引脚。
+     * 后续正式中断采集版本中，应避免在非事件处理处频繁读取 STATUS1。
+     */
+    MAX30102_ReadBuffer(INTERRUPT_STATUS1, &status1, 1);
+
+    MAX30102_ReadBuffer(FIFO_WR_POINTER, &wr, 1);
+    MAX30102_ReadBuffer(FIFO_RD_POINTER, &rd, 1);
+    MAX30102_ReadBuffer(FIFO_OV_COUNTER, &ov, 1);
+
+    rec.data.ppg_int_diag.status1 = status1;
+    rec.data.ppg_int_diag.ie1     = ie1;
+    rec.data.ppg_int_diag.fifo_wr = wr & 0x1F;
+    rec.data.ppg_int_diag.fifo_rd = rd & 0x1F;
+    rec.data.ppg_int_diag.fifo_ov = ov & 0x1F;
+
+    /* 3. 读取 STATUS1 后，立即再次读引脚电平 */
+    s = HAL_GPIO_ReadPin(PPG_INT_GPIO_Port, PPG_INT_Pin);
+    rec.data.ppg_int_diag.pin_after = (s == GPIO_PIN_SET) ? 1 : 0;
+
+    /* 4. 入 SD 队列，异步写卡 */
+    PPGDiag_Enqueue(&rec);
 }
 
 /**
