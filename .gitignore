@@ -35,6 +35,28 @@ python/*.egg-info/
 python/.venv/
 python/venv/
 
+# STM32CubeMX generated (not committed)
+Drivers/
+Middlewares/
+FATFS/App/
+FATFS/Target/*
+!FATFS/Target/sd_diskio.c
+cmake/
+
+# Runtime output
+Data/
+stm32_log.txt
+
+# Backup / temporary
+*.backup
+
+# Claude / VSCode / IDE local config
+.clangd
+.clangd/
+.claude/
+.vscode/
+opencli-extension/
+
 # Generated / temporary
 *.swp
 *.swo
