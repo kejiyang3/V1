@@ -71,6 +71,14 @@ volatile uint32_t usb_tx_drop_count = 0;
 
 /* 任务创建错误掩码 (bit0=LVGL, bit1=Sensor, bit2=SDWriter, bit3=USBDump, bit4=Audio, bit5=Button, bit6=BLE) */
 volatile uint32_t g_task_create_error = 0;
+
+/* === MAX30102 中断/FIFO 诊断变量 (Sensor 任务写入, LCD 读取) === */
+volatile uint8_t g_ppg_ie1      = 0;  /* INTERRUPT_ENABLE1 readback */
+volatile uint8_t g_ppg_is1      = 0;  /* INTERRUPT_STATUS1 readback */
+volatile uint8_t g_ppg_fifo_wr  = 0;  /* FIFO_WR_POINTER & 0x1F */
+volatile uint8_t g_ppg_fifo_rd  = 0;  /* FIFO_RD_POINTER & 0x1F */
+volatile uint8_t g_ppg_fifo_ov  = 0;  /* FIFO_OV_COUNTER & 0x1F */
+volatile uint8_t g_ppg_mode     = 0;  /* MODE_CONFIGURATION */
 /* USER CODE END Variables */
 
 /* Definitions for Task_LVGL */
@@ -388,16 +396,35 @@ void StartTask_Sensor(void *argument)
       SD_DebugLog_WriteSnapshot();
     }
 
-    /* PPG 中断状态监测 — 每秒打印 irq_count + 引脚电平 */
-    static uint32_t last_ppg_mon = 0;
-    if (HAL_GetTick() - last_ppg_mon >= 1000) {
-      last_ppg_mon = HAL_GetTick();
-      GPIO_PinState ppg_pin =
-          HAL_GPIO_ReadPin(PPG_INT_GPIO_Port, PPG_INT_Pin);
-      extern volatile uint32_t ppg_irq_count;
-      Safe_USB_Printf("[PPG_IRQ_MON] irq_count=%lu, int_pin=%s\r\n",
-                      (unsigned long)ppg_irq_count,
-                      (ppg_pin == GPIO_PIN_SET) ? "HIGH" : "LOW");
+    /* MAX30102 中断/FIFO 寄存器诊断 — 每秒读一次 I2C */
+    static uint32_t last_ppg_reg = 0;
+    if (HAL_GetTick() - last_ppg_reg >= 1000) {
+      last_ppg_reg = HAL_GetTick();
+      uint8_t v;
+
+      /*
+       * NOTE: 读取 INTERRUPT_STATUS1 会清除对应中断状态，
+       * 这里仅用于调试定位，每秒读一次。
+       * 正式中断采集版本不应在无关位置频繁读取 STATUS1。
+       */
+
+      if (MAX30102_ReadBuffer(INTERRUPT_ENABLE1, &v, 1) == SUCCESS)
+          g_ppg_ie1 = v;
+
+      if (MAX30102_ReadBuffer(INTERRUPT_STATUS1, &v, 1) == SUCCESS)
+          g_ppg_is1 = v;
+
+      if (MAX30102_ReadBuffer(FIFO_WR_POINTER, &v, 1) == SUCCESS)
+          g_ppg_fifo_wr = v & 0x1F;
+
+      if (MAX30102_ReadBuffer(FIFO_RD_POINTER, &v, 1) == SUCCESS)
+          g_ppg_fifo_rd = v & 0x1F;
+
+      if (MAX30102_ReadBuffer(FIFO_OV_COUNTER, &v, 1) == SUCCESS)
+          g_ppg_fifo_ov = v & 0x1F;
+
+      if (MAX30102_ReadBuffer(MODE_CONFIGURATION, &v, 1) == SUCCESS)
+          g_ppg_mode = v;
     }
   }
   /* USER CODE END StartTask_Sensor */

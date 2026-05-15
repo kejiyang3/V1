@@ -43,6 +43,10 @@ static lv_obj_t *ui_label_eovf;
 static lv_obj_t *ui_label_written;
 static lv_obj_t *ui_label_ppg_irq;
 static lv_obj_t *ui_label_ppg_int;
+static lv_obj_t *ui_label_ppg_ie1_is1;
+static lv_obj_t *ui_label_ppg_fifo_wr_rd;
+static lv_obj_t *ui_label_ppg_fifo_ov;
+static lv_obj_t *ui_label_ppg_mode;
 
 /* 辅助: 显示/隐藏一组对象 */
 static void show_group(lv_obj_t **objs, int count, int visible)
@@ -125,7 +129,9 @@ static void ui_update_cb(lv_timer_t *timer)
         ui_label_title2, ui_label_status_reg,
         ui_label_pll_seen, ui_label_pll_edge,
         ui_label_eovf, ui_label_written,
-        ui_label_ppg_irq, ui_label_ppg_int
+        ui_label_ppg_irq, ui_label_ppg_int,
+        ui_label_ppg_ie1_is1, ui_label_ppg_fifo_wr_rd,
+        ui_label_ppg_fifo_ov, ui_label_ppg_mode
     };
     show_group(page1, sizeof(page1)/sizeof(page1[0]), s_page == 0);
     show_group(page2, sizeof(page2)/sizeof(page2[0]), s_page == 1);
@@ -207,19 +213,27 @@ static void ui_update_cb(lv_timer_t *timer)
         lv_label_set_text_fmt(ui_label_eovf,       "EOVF: %lu",      g_ecg_rec.fifo_eovf_count);
         lv_label_set_text_fmt(ui_label_written,    "Written: %lu",   g_ecg_rec.ecg_written_count);
 
-        /* PPG 中断监测 — 约 1 秒刷新 */
+        /* PPG 中断/FIFO 诊断 — 约 1 秒刷新 (数据由 Sensor 任务填充) */
         {
-            static uint32_t last_ppg_diag = 0;
-            if ((now - last_ppg_diag) >= 1000) {
-                last_ppg_diag = now;
-                extern volatile uint32_t ppg_irq_count;
-                GPIO_PinState ppg_pin =
-                    HAL_GPIO_ReadPin(PPG_INT_GPIO_Port, PPG_INT_Pin);
-                lv_label_set_text_fmt(ui_label_ppg_irq,
-                    "PPG IRQ: %lu", (unsigned long)ppg_irq_count);
-                lv_label_set_text_fmt(ui_label_ppg_int,
-                    "PPG INT: %s", (ppg_pin == GPIO_PIN_SET) ? "HIGH" : "LOW");
-            }
+            extern volatile uint32_t ppg_irq_count;
+            extern volatile uint8_t g_ppg_ie1, g_ppg_is1;
+            extern volatile uint8_t g_ppg_fifo_wr, g_ppg_fifo_rd;
+            extern volatile uint8_t g_ppg_fifo_ov, g_ppg_mode;
+            GPIO_PinState ppg_pin =
+                HAL_GPIO_ReadPin(PPG_INT_GPIO_Port, PPG_INT_Pin);
+
+            lv_label_set_text_fmt(ui_label_ppg_irq,
+                "PPG IRQ: %lu", (unsigned long)ppg_irq_count);
+            lv_label_set_text_fmt(ui_label_ppg_int,
+                "PPG INT: %s", (ppg_pin == GPIO_PIN_SET) ? "HIGH" : "LOW");
+            lv_label_set_text_fmt(ui_label_ppg_ie1_is1,
+                "IE1/IS1: %02X/%02X", g_ppg_ie1, g_ppg_is1);
+            lv_label_set_text_fmt(ui_label_ppg_fifo_wr_rd,
+                "FIFO W/R: %02X/%02X", g_ppg_fifo_wr, g_ppg_fifo_rd);
+            lv_label_set_text_fmt(ui_label_ppg_fifo_ov,
+                "FIFO OV: %02X", g_ppg_fifo_ov);
+            lv_label_set_text_fmt(ui_label_ppg_mode,
+                "MODE: %02X", g_ppg_mode);
         }
     }
 }
@@ -390,11 +404,33 @@ void App_LVGL_TestUI(void)
     lv_obj_set_style_text_color(ui_label_ppg_int, lv_color_hex(0xFFAA44), 0);
     lv_obj_align(ui_label_ppg_int, LV_ALIGN_TOP_LEFT, 10, y); y += dy;
 
+    ui_label_ppg_ie1_is1 = lv_label_create(lv_scr_act());
+    lv_label_set_text(ui_label_ppg_ie1_is1, "IE1/IS1: 00/00");
+    lv_obj_set_style_text_color(ui_label_ppg_ie1_is1, lv_color_hex(0xFF8844), 0);
+    lv_obj_align(ui_label_ppg_ie1_is1, LV_ALIGN_TOP_LEFT, 10, y); y += dy;
+
+    ui_label_ppg_fifo_wr_rd = lv_label_create(lv_scr_act());
+    lv_label_set_text(ui_label_ppg_fifo_wr_rd, "FIFO W/R: 00/00");
+    lv_obj_set_style_text_color(ui_label_ppg_fifo_wr_rd, lv_color_hex(0xFF8844), 0);
+    lv_obj_align(ui_label_ppg_fifo_wr_rd, LV_ALIGN_TOP_LEFT, 10, y); y += dy;
+
+    ui_label_ppg_fifo_ov = lv_label_create(lv_scr_act());
+    lv_label_set_text(ui_label_ppg_fifo_ov, "FIFO OV: 00");
+    lv_obj_set_style_text_color(ui_label_ppg_fifo_ov, lv_color_hex(0xFF8844), 0);
+    lv_obj_align(ui_label_ppg_fifo_ov, LV_ALIGN_TOP_LEFT, 10, y); y += dy;
+
+    ui_label_ppg_mode = lv_label_create(lv_scr_act());
+    lv_label_set_text(ui_label_ppg_mode, "MODE: 00");
+    lv_obj_set_style_text_color(ui_label_ppg_mode, lv_color_hex(0xFF8844), 0);
+    lv_obj_align(ui_label_ppg_mode, LV_ALIGN_TOP_LEFT, 10, y); y += dy;
+
     /* 默认显示 Page 1, 隐藏 Page 2 */
     lv_obj_t *hide_init[] = {
         ui_label_title2, ui_label_status_reg, ui_label_pll_seen,
         ui_label_pll_edge, ui_label_eovf, ui_label_written,
-        ui_label_ppg_irq, ui_label_ppg_int
+        ui_label_ppg_irq, ui_label_ppg_int,
+        ui_label_ppg_ie1_is1, ui_label_ppg_fifo_wr_rd,
+        ui_label_ppg_fifo_ov, ui_label_ppg_mode
     };
     for (size_t i = 0; i < sizeof(hide_init)/sizeof(hide_init[0]); i++) {
         lv_obj_add_flag(hide_init[i], LV_OBJ_FLAG_HIDDEN);
