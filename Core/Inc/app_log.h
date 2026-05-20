@@ -9,7 +9,7 @@ extern "C" {
  * V1 阶段关闭 USB 日志。
  * USB CDC 当前不稳定，不再作为主要调试手段。
  */
-#define USB_LOG_ENABLE    1
+#define USB_LOG_ENABLE    0
 
 #if USB_LOG_ENABLE
 void Safe_USB_Printf(const char *format, ...);

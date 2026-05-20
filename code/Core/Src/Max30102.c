@@ -132,14 +132,10 @@ MAX30102_InitResult_t MAX30102_Init(void)
         APP_USB_LOG("[MAX30102] Init done. Cleared initial INT status: 0x%02X\r\n", pwr_rdy);
     }
 
-    /* === 诊断：强制使能中断 + 寄存器 Dump + FIFO 验证 === */
-
-    /* 强制使能 A_FULL + PPG_RDY 中断，覆盖 0x00 */
-    _write_reg(INTERRUPT_ENABLE1, 0xC0);  /* bit7=A_FULL, bit6 = PPG_RDY */
-
+#if USB_LOG_ENABLE
+    /* 诊断：寄存器 Dump + FIFO 验证 (仅 USB_LOG 使能时执行) */
     {
         uint8_t reg_dump[6];
-
         _read_regs(INTERRUPT_ENABLE1,     &reg_dump[0], 1);
         _read_regs(INTERRUPT_ENABLE2,     &reg_dump[1], 1);
         _read_regs(FIFO_CONFIGURATION,    &reg_dump[2], 1);
@@ -156,7 +152,6 @@ MAX30102_InitResult_t MAX30102_Init(void)
         APP_USB_LOG("  - LED1_PA (0x0C) = 0x%02X (Must not be 0x00)\r\n", reg_dump[5]);
     }
 
-    /* 验证 FIFO 写指针是否在递增（相隔 50ms） */
     {
         uint8_t wr_ptr1 = 0, wr_ptr2;
         _read_regs(FIFO_WR_POINTER, &wr_ptr1, 1);
@@ -164,15 +159,13 @@ MAX30102_InitResult_t MAX30102_Init(void)
         HAL_Delay(50);
         _read_regs(FIFO_WR_POINTER, &wr_ptr2, 1);
         wr_ptr2 &= 0x1F;
-
         APP_USB_LOG("[DIAG] FIFO Write Pointer: T1=%d, T2=%d\r\n", wr_ptr1, wr_ptr2);
-
-        if (wr_ptr1 == wr_ptr2) {
-            APP_USB_LOG("[DIAG] FATAL: FIFO is NOT updating! Sensor is NOT sampling. Check MODE and LED PA.\r\n");
-        } else {
-            APP_USB_LOG("[DIAG] FIFO IS UPDATING. Sensor is running. The issue is STRICTLY the INT pin routing/config.\r\n");
-        }
+        APP_USB_LOG("[DIAG] %s\r\n",
+            (wr_ptr1 == wr_ptr2) ?
+            "FATAL: FIFO NOT updating. Check MODE and LED PA." :
+            "FIFO IS UPDATING. Issue is INT pin routing/config.");
     }
+#endif
 
     return MAX30102_INIT_OK;
 }
