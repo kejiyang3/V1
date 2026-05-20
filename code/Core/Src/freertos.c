@@ -281,7 +281,9 @@ void StartTask_Sensor(void *argument)
   Safe_USB_Printf("\r\n[SENSOR_INIT]\r\n");
   if (ppg_ret == MAX30102_INIT_OK) {
       Safe_USB_Printf("[MAX30102] I2C CALL OK, INIT OK\r\n");
-      MAX30102_Debug_Poll_INT_Pin();
+      /* 轮询探针已完成使命，证明硬件链路通。现在注释掉，避免阻塞 RTOS 调度。
+       * 遗留中断由后续 recording start 流程清 INT_STATUS1 释放引脚。 */
+      // MAX30102_Debug_Poll_INT_Pin();
   }
   else if (ppg_ret == MAX30102_INIT_NOT_FOUND)
       Safe_USB_Printf("[MAX30102] I2C CALL FAIL, DEVICE NOT FOUND\r\n");
