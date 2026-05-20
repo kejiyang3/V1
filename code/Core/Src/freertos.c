@@ -279,8 +279,10 @@ void StartTask_Sensor(void *argument)
   uint8_t icm_ret = ICM20948_Init();
 
   Safe_USB_Printf("\r\n[SENSOR_INIT]\r\n");
-  if (ppg_ret == MAX30102_INIT_OK)
+  if (ppg_ret == MAX30102_INIT_OK) {
       Safe_USB_Printf("[MAX30102] I2C CALL OK, INIT OK\r\n");
+      MAX30102_Debug_Poll_INT_Pin();
+  }
   else if (ppg_ret == MAX30102_INIT_NOT_FOUND)
       Safe_USB_Printf("[MAX30102] I2C CALL FAIL, DEVICE NOT FOUND\r\n");
   else if (ppg_ret == MAX30102_INIT_CONFIG_FAILED)

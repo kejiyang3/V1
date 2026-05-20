@@ -75,6 +75,9 @@ float MAX30102_getSpO2(float *ir_input_data, float *red_input_data, uint16_t cac
 ErrorStatus MAX30102_EnableFifoAlmostFullInterrupt(void);
 ErrorStatus MAX30102_DisableInterrupts(void);
 
+/* 调试：纯软件轮询 PPG_INT 引脚电平 (绕过 EXTI) */
+void MAX30102_Debug_Poll_INT_Pin(void);
+
 extern volatile uint8_t max30102_int_flag;
 
 #ifdef __cplusplus

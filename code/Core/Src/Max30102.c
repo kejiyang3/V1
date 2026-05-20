@@ -1,6 +1,7 @@
 #include "max30102.h"
 #include "gpio.h"
 #include "i2c.h"
+#include "app_log.h"
 #include <stdio.h>
 #include "usart.h"
 
@@ -120,9 +121,58 @@ MAX30102_InitResult_t MAX30102_Init(void)
     if (_write_reg(INTERRUPT_ENABLE1, 0x00) != SUCCESS) return MAX30102_INIT_CONFIG_FAILED;
     if (_write_reg(INTERRUPT_ENABLE2, 0x00) != SUCCESS) return MAX30102_INIT_CONFIG_FAILED;
 
-    /* 最终清中断 */
+        /* 最终清中断 */
     _read_regs(INTERRUPT_STATUS1, &data1, 1);
     _read_regs(INTERRUPT_STATUS2, &data2, 1);
+
+    /* 清除上电 PWR_RDY 中断，释放 INT 引脚 */
+    {
+        uint8_t pwr_rdy;
+        _read_regs(INTERRUPT_STATUS1, &pwr_rdy, 1);
+        APP_USB_LOG("[MAX30102] Init done. Cleared initial INT status: 0x%02X\r\n", pwr_rdy);
+    }
+
+    /* === 诊断：强制使能中断 + 寄存器 Dump + FIFO 验证 === */
+
+    /* 强制使能 A_FULL + PPG_RDY 中断，覆盖 0x00 */
+    _write_reg(INTERRUPT_ENABLE1, 0xC0);  /* bit7=A_FULL, bit6 = PPG_RDY */
+
+    {
+        uint8_t reg_dump[6];
+
+        _read_regs(INTERRUPT_ENABLE1,     &reg_dump[0], 1);
+        _read_regs(INTERRUPT_ENABLE2,     &reg_dump[1], 1);
+        _read_regs(FIFO_CONFIGURATION,    &reg_dump[2], 1);
+        _read_regs(MODE_CONFIGURATION,    &reg_dump[3], 1);
+        _read_regs(SPO2_CONFIGURATION,    &reg_dump[4], 1);
+        _read_regs(LED1_PULSE_AMPLITUDE,  &reg_dump[5], 1);
+
+        APP_USB_LOG("[DIAG] MAX30102 REG DUMP:\r\n");
+        APP_USB_LOG("  - INT_EN1 (0x02) = 0x%02X (Expect 0xC0: A_FULL|PPG_RDY)\r\n", reg_dump[0]);
+        APP_USB_LOG("  - INT_EN2 (0x03) = 0x%02X\r\n", reg_dump[1]);
+        APP_USB_LOG("  - FIFO_CFG(0x08) = 0x%02X\r\n", reg_dump[2]);
+        APP_USB_LOG("  - MODE_CFG(0x09) = 0x%02X (Expect 0x03 for SpO2)\r\n", reg_dump[3]);
+        APP_USB_LOG("  - SPO2_CFG(0x0A) = 0x%02X\r\n", reg_dump[4]);
+        APP_USB_LOG("  - LED1_PA (0x0C) = 0x%02X (Must not be 0x00)\r\n", reg_dump[5]);
+    }
+
+    /* 验证 FIFO 写指针是否在递增（相隔 50ms） */
+    {
+        uint8_t wr_ptr1 = 0, wr_ptr2;
+        _read_regs(FIFO_WR_POINTER, &wr_ptr1, 1);
+        wr_ptr1 &= 0x1F;
+        HAL_Delay(50);
+        _read_regs(FIFO_WR_POINTER, &wr_ptr2, 1);
+        wr_ptr2 &= 0x1F;
+
+        APP_USB_LOG("[DIAG] FIFO Write Pointer: T1=%d, T2=%d\r\n", wr_ptr1, wr_ptr2);
+
+        if (wr_ptr1 == wr_ptr2) {
+            APP_USB_LOG("[DIAG] FATAL: FIFO is NOT updating! Sensor is NOT sampling. Check MODE and LED PA.\r\n");
+        } else {
+            APP_USB_LOG("[DIAG] FIFO IS UPDATING. Sensor is running. The issue is STRICTLY the INT pin routing/config.\r\n");
+        }
+    }
 
     return MAX30102_INIT_OK;
 }
@@ -279,4 +329,33 @@ ErrorStatus MAX30102_DisableInterrupts(void)
     if (_write_reg(INTERRUPT_ENABLE2, 0x00) != SUCCESS) return ERROR;
     MAX30102_ClearInterruptStatus(&s1, &s2);
     return SUCCESS;
+}
+
+/**
+  * @brief  调试：纯软件轮询 PPG_INT 引脚电平 (绕过 EXTI)
+  * @note   连续 200 次 × 10ms = 2 秒采样，确认 TXS0104E 转换后的信号状态。
+  *         结果通过 USB CDC 输出。
+  */
+void MAX30102_Debug_Poll_INT_Pin(void)
+{
+    uint32_t high_cnt = 0, low_cnt = 0;
+
+    APP_USB_LOG("[DIAG] Start Polling MAX30102 PPG_INT Pin (PH1) for 2 seconds...\r\n");
+
+    for (int i = 0; i < 200; i++) {
+        if (HAL_GPIO_ReadPin(PPG_INT_GPIO_Port, PPG_INT_Pin) == GPIO_PIN_SET) {
+            high_cnt++;
+        } else {
+            low_cnt++;
+        }
+        HAL_Delay(10);
+    }
+
+    APP_USB_LOG("[DIAG] PPG_INT Polling Result: High=%lu, Low=%lu\r\n", high_cnt, low_cnt);
+
+    if (low_cnt == 0) {
+        APP_USB_LOG("[DIAG] PPG_INT is ALWAYS HIGH! TXS0104E disconnected, or MAX30102 not asserting INT.\r\n");
+    } else if (high_cnt == 0) {
+        APP_USB_LOG("[DIAG] PPG_INT is ALWAYS LOW! Interrupt not cleared (check PWR_RDY), or TXS0104E latch-up.\r\n");
+    }
 }

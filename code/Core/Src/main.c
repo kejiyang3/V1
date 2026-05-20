@@ -375,6 +375,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   }
   else if (GPIO_Pin == PPG_INT_Pin) {
     ppg_irq_count++;
+    /* 在 ISR 中无法安全调用 Safe_USB_Printf (阻塞)，加该宏确认下降沿通过 TXS */
     if (PpgTaskHandle != NULL) {
       vTaskNotifyGiveFromISR(PpgTaskHandle, &xHigherPriorityTaskWoken);
     }
