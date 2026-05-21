@@ -27,7 +27,7 @@ ninja -C build
 - **Level Shifter**: TXS0104ERGYR on I2C3 bus
 - **Display**: ST7789V 240x280 LCD on SPI1 + DMA, backlight PWM (TIM3_CH4)
 - **Touch**: CST816 capacitive touch on I2C2
-- **USB**: CDC Virtual Serial Port
+- **USB**: CDC Virtual Serial Port (unstable under high frequency output)
 - **BLE**: UART1 + DMA (idle-line interrupt)
 - **SD Card**: SDMMC + FatFS
 - **Button**: PA1 (active-low, software debounce)
@@ -53,7 +53,7 @@ ISR 只做: 累加 irq_count + 通知任务。不读 I2C/SPI/SD。
 | Task | Priority | Stack | Role |
 |------|----------|-------|------|
 | Task_Sensor | AboveNormal | 8KB | ECG MAX30003 FIFO read + Start/Stop control + PPG diag log |
-| Task_PPG | Normal | 4KB | PPG MAX30102 FIFO read + USB real-time print |
+| Task_PPG | Normal | 4KB | PPG MAX30102 FIFO read + SD storage via MultiSensorLogger |
 | Task_IMU | Normal | 4KB | ICM20948 6-axis raw data read |
 | Task_MSWriter | BelowNormal | 8KB | Multi-sensor 2s block CSV writer |
 | Task_PPGDiagWr | BelowNormal7 | 2KB | PPG INT diagnostic CSV writer (0:/ppg_int_diag.csv) |
@@ -72,29 +72,31 @@ ISR 只做: 累加 irq_count + 通知任务。不读 I2C/SPI/SD。
 2. Each sensor task reads data → calls `MultiSensorLogger_AddXXX()` per sample
 3. Samples fill 2-second double-buffer blocks (ECG=1024, PPG=400, IMU=104 samples)
 4. Full block → `submit_xxx_block()` → `MS_BlockMsg_t` queue (depth 12)
-5. `Task_MSWriter`: opens CSV → writes header → dequeues blocks → `f_write` → `f_sync` every 512 writes
-6. **Stop** → `RequestStopAndFlush()` flushes partial blocks → close file
+5. `Task_MSWriter`: opens CSV → writes header → dequeues blocks → `f_write` → `f_sync` every 8 blocks
+6. **Stop** → `RequestStopAndFlush()` flushes partial blocks → `f_sync` + `f_close` **(no f_mount(NULL))** to avoid unmount race with PPGDiagWriter
 
-### PPG USB Real-Time Output
-- `StartTask_PPG`: `ulTaskNotifyTake` → `MAX30102_ReadFIFO_Batch` → per-sample `Safe_USB_Printf("PPG,seq,tick,ir,red\r\n")`
-- ~200 lines/sec during recording
-- SD writing temporarily disabled for PPG to ensure USB stability
+### Recording Start/Stop Flow
+- **Start**: clear notifyCount → clear EXTI pending → `MAX30102_ClearInterruptStatus` → `ICM20948_ClearInterruptStatus` → `MAX30102_EnableFifoAlmostFullInterrupt` → `ICM20948_EnableDataReadyInterrupt` → `ecg_streaming=1` → `MAX30003_StartStream`
+- **Stop**: `ecg_streaming=0` → `MAX30003_StopStream` → `MAX30102_DisableInterrupts` → `ICM20948_DisableDataReadyInterrupt` → `MultiSensorLogger_RequestStopAndFlush` → state = ECG_REC_STOPPING
+
+### MAX30102 INT Pin Protocol (Critical)
+- MAX30102 INT is **open-drain, active low**. After power-up, PWR_RDY asserts INT low.
+- Reading INTERRUPT_STATUS1 (0x00) **clears the interrupt status and releases INT pin back HIGH**.
+- MAX30102_ReadFIFO_Batch reads STATUS1 at entry to release INT, then reads FIFO data.
+- Without reading STATUS1 or FIFO_DATA, INT stays low forever — EXTI only triggers once.
+- When enabling A_FULL via `INTERRUPT_ENABLE1 = 0x80`, if FIFO already has data, INT immediately goes LOW. This falling edge is normal.
+
+### SD Write Safety
+- `multi_sensor_logger.c`: all `f_write` calls use `sd_write_checked()` — checks `FRESULT` and `bw==len`. Write ok/fail counted separately per sensor type.
+- Two SD Writers co-exist (main CSV + PPG diag CSV), sharing `Mtx_SDCardHandle` mutex.
+- **Never** `f_mount(NULL, ...)` in stop/error paths — the other writer may have a file open on the same volume.
+- `MS_SYNC_EVERY_BLOCKS=8`, `PPG_DIAG_SYNC_EVERY=8` — fast sync for short recordings.
+- PPG diag writer does extra `f_sync` on `ECG_REC_STOPPING`/`STOPPED` state.
 
 ### LVGL UI Pages
 - **Page 1 (Main)**: ECG state, lead status, sample rate, file name, Start/Stop button
 - **Page 2 (Diagnostic)**: STATUS register, PLL/EOVF/Written, PPG IRQ/INT, IE1/IS1, FIFO W/R/OV, MODE
 - Swipe left/right to switch pages
-
-### MAX30102 ReadFIFO_Batch (Diagnostic Mode)
-- Reads INTERRUPT_STATUS1 to release INT pin but does NOT bail on A_FULL bit=0
-- Always computes FIFO available count from WR/RD pointers
-- Returns 0 only if no data available
-
-### ICM20948 Init Verification
-- Every I2C write checked for HAL_OK
-- Post-init: re-reads WHO_AM_I, PWR1, PWR2, INT_PIN_CFG
-- 10x WHO_AM_I probe at 20ms intervals before declaring success
-- `ICM20948_ENABLE_MAG_MASTER=0` — magnetometer bypassed, 6-axis only
 
 ### Key Files
 | File | Content |
@@ -111,17 +113,21 @@ ISR 只做: 累加 irq_count + 通知任务。不读 I2C/SPI/SD。
 | `Core/Src/stm32l4xx_it.c` | EXTI handlers: EXTI1→PPG, EXTI2→ICM, EXTI9_5→ECG |
 | `Core/Inc/main.h` | Pin macros, `ICM_INT_LINE_PULLDOWN_TEST_ENABLE` switch |
 | `Core/Inc/sensor_record.h` | `SensorRecord_t` with ECG/PPG/IMU/PPG_INT_DIAG union types |
+| `Core/Inc/app_log.h` | USB logging gate: `USB_LOG_ENABLE` — set 1 for diagnostic prints |
 | `App/LVGL/app_lvgl.c` | LVGL 2-page UI with PPG diag labels |
 | `Core/Inc/FreeRTOSConfig.h` | Stack sizes, priorities, heap: 61440 bytes |
+| `CMakeLists.txt` | Build config (root = real build) |
+| `code/CMakeLists.txt` | Build config copy for GitHub publishing |
+
+### Debug Macros
+- `ICM_INT_LINE_PULLDOWN_TEST_ENABLE` (`main.h`) — set `1` for PH1 open-drain pulldown test (2s LOW/2s HIGH loop before RTOS)
+- `USB_LOG_ENABLE` (`app_log.h`) — set `1` to enable USB CDC diagnostic prints via `APP_USB_LOG()`. **USB CDC unstable under sustained high frequency output** — use only for short diagnostic bursts.
+- `ICM20948_ENABLE_MAG_MASTER` (`icm20948.h`) — set `0` (magnetometer disabled)
 
 ### Build Warnings (pre-existing, not fixable)
 - `-Wunused-parameter` in HAL/ThirdParty/FatFs driver files
 - `-Wunused-function` in `sd_sensor_logger.c` (old `SDLogger_TypeToString`)
 - `-Wunused-variable` in `lv_port_indev.c`
-
-### Temporary Debug Macros
-- `ICM_INT_LINE_PULLDOWN_TEST_ENABLE` in `main.h` — set to `0` for normal operation
-- MAX30003 code was temporarily commented out during MAX30102 debugging (now restored)
 
 ### Python Tools
 - `python/readECG.py` — Read binary ECG data, plot time + frequency domain
